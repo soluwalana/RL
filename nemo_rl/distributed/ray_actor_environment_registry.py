@@ -60,6 +60,9 @@ ACTOR_ENVIRONMENT_REGISTRY: dict[str, str] = {
     "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor": PY_EXECUTABLES.VLLM,
     "nemo_rl.environments.tools.retriever.RAGEnvironment": PY_EXECUTABLES.SYSTEM,
     "nemo_rl.environments.nemo_gym.NemoGym": PY_EXECUTABLES.NEMO_GYM,
+    # The episode broker shares the NeMo-Gym environment: it imports the broker wire contract from
+    # nemo_gym and its OpenSandbox backend needs the SDK that nemo_gym[sandbox] pulls in.
+    "nemo_rl.environments.sandbox.broker_actor.SandboxEpisodeBrokerActor": PY_EXECUTABLES.NEMO_GYM,
 }
 
 from nemo_rl.modelopt.registry import MODELOPT_ACTOR_REGISTRY

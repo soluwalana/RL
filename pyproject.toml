@@ -212,7 +212,9 @@ modelopt = ["nvidia-modelopt"]
 nvrx = [
   "nvidia-resiliency-ext==0.6.0",
 ] # for ft_launcher (fault-tolerant training launcher)
-nemo_gym = ["nemo_gym"]
+# The [sandbox] extra carries the OpenSandbox SDK and tenacity. The episode broker actor runs in
+# this environment and is the only OpenSandbox client for episode sandboxes.
+nemo_gym = ["nemo_gym[sandbox]"]
 
 [dependency-groups]
 
