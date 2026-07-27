@@ -10,6 +10,6 @@
 	shallow = true
 [submodule "3rdparty/Gym-workspace/Gym"]
 	path = 3rdparty/Gym-workspace/Gym
-	url = https://github.com/NVIDIA-NeMo/Gym.git
-	branch = main
+	url = git@github.com:soluwalana/Gym.git
+	branch = nmp/customizer
 	shallow = true
