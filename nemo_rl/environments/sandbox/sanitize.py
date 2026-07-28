@@ -31,6 +31,7 @@ is a setting; the guarantee here does not rely on it.
 
 import base64
 import binascii
+import re
 
 from nemo_gym.sandbox.broker import (
     BrokerErrorCode,
@@ -43,11 +44,19 @@ from pydantic import BaseModel, ConfigDict, Field
 from nemo_rl.environments.sandbox.backends.base import SanitizedEpisodeSpec
 from nemo_rl.environments.sandbox.config import (
     JOB_ID_METADATA_KEY,
+    RESERVED_ENV_PREFIX,
     RESERVED_METADATA_PREFIX,
     EpisodeBrokerConfig,
 )
 from nemo_rl.environments.sandbox.egress import build_egress_policy
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
+
+
+# Kubernetes label key: an optional DNS-subdomain prefix, then a name of at most 63 characters
+# that starts and ends alphanumeric.
+K8S_LABEL_KEY_RE = re.compile(
+    r"^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+)
 
 
 class SanitizedExecCall(BaseModel):
@@ -123,15 +132,31 @@ def _sanitize_metadata(
             f"metadata key(s) reserved by the broker: {', '.join(reserved)}",
             400,
         )
+    # OpenSandbox turns sandbox metadata into Kubernetes pod labels, so a key that is not a valid
+    # label key fails server-side as an opaque backend error. Catching it here gives the
+    # environment something it can act on.
+    invalid = sorted(key for key in request.metadata if not K8S_LABEL_KEY_RE.match(key))
+    if invalid:
+        _reject(
+            BrokerErrorCode.INVALID_REQUEST,
+            f"metadata key(s) are not valid Kubernetes label keys: {', '.join(invalid)}",
+            400,
+        )
     return {**request.metadata, JOB_ID_METADATA_KEY: config.job_id}
 
 
 def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
     """Validate environment variable names and values.
 
-    Values are caller-controlled and stay that way -- they land inside an already-isolated episode.
-    What is refused is anything that could be reinterpreted as structure by a backend that builds
-    environment strings itself.
+    There is deliberately no name allowlist here. Episode environment lands inside a sandbox that
+    is already isolated, so a caller setting ``LD_PRELOAD`` or a proxy variable only affects its
+    own episode; and a caller setting a credential name supplies its own worthless value rather
+    than obtaining ours. An allowlist would have to enumerate every variable a grading image
+    legitimately reads, which is unbounded, in exchange for no boundary it actually moves.
+
+    What is refused is narrower and real: names that could be reinterpreted as structure by a
+    backend that builds environment strings itself, and the prefix the broker reserves so a caller
+    cannot pre-empt a variable the broker may later need to inject.
     """
     for key, value in env.items():
         if not key or "=" in key or "\x00" in key or "\x00" in value:
@@ -140,6 +165,13 @@ def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
                 f"invalid environment variable name: {key!r}",
                 400,
             )
+    reserved = sorted(key for key in env if key.startswith(RESERVED_ENV_PREFIX))
+    if reserved:
+        _reject(
+            BrokerErrorCode.FIELD_NOT_ALLOWED,
+            f"environment variable name(s) reserved by the broker: {', '.join(reserved)}",
+            400,
+        )
     return dict(env)
 
 

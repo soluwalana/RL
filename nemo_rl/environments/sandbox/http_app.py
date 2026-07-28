@@ -55,6 +55,7 @@ from nemo_gym.sandbox.broker import (
 )
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from nemo_rl.environments.sandbox import audit
 from nemo_rl.environments.sandbox.backends.base import (
     EpisodeSandboxBackend,
     UnsupportedEpisodeOperationError,
@@ -233,6 +234,17 @@ def build_broker_app(
     async def _on_broker_error(
         request: Request, exc: BrokerRequestError
     ) -> JSONResponse:
+        # Every refusal funnels through here, so this is the one place that has to record them.
+        audit.record(
+            "request.rejected",
+            job_id=config.job_id,
+            outcome="rejected",
+            method=request.method,
+            path=request.url.path,
+            code=exc.code.value,
+            status=exc.status_code,
+            reason=audit.truncate(exc.message),
+        )
         return JSONResponse(
             status_code=exc.status_code, content=_error_body(exc.message, exc.code)
         )
@@ -246,6 +258,16 @@ def build_broker_app(
         summary = "; ".join(
             f"{'.'.join(str(part) for part in error.get('loc', ()))}: {error.get('msg', '')}"
             for error in exc.errors()[:10]
+        )
+        audit.record(
+            "request.rejected",
+            job_id=config.job_id,
+            outcome="rejected",
+            method=request.method,
+            path=request.url.path,
+            code=BrokerErrorCode.INVALID_REQUEST.value,
+            status=422,
+            reason=audit.truncate(summary),
         )
         return JSONResponse(
             status_code=422,
@@ -297,6 +319,16 @@ def build_broker_app(
             raise
 
         await episodes.bind(episode_id, backend_id)
+        audit.record(
+            "episode.create",
+            job_id=config.job_id,
+            outcome="allowed",
+            episode_id=episode_id,
+            image=spec.image,
+            ttl_s=spec.ttl_s,
+            staged_files=len(spec.files),
+            egress_default_action=spec.egress.default_action,
+        )
         return EpisodeCreateResponse(episode_id=episode_id)
 
     @app.get(EPISODE_PATH, response_model=EpisodeStatusResponse, dependencies=[auth])
@@ -324,6 +356,19 @@ def build_broker_app(
                 timeout_s=call.timeout_s,
                 user=call.user,
             )
+        # Command text is recorded (truncated) because "what did this environment run as root"
+        # is the question an audit of a grading run has to answer. Environment values are not.
+        audit.record(
+            "episode.exec",
+            job_id=config.job_id,
+            outcome="allowed",
+            episode_id=episode_id,
+            user=call.user,
+            timeout_s=call.timeout_s,
+            env_keys=sorted(call.env),
+            command=audit.truncate(call.command),
+            return_code=result.return_code,
+        )
         return EpisodeExecResponse(
             stdout=result.stdout,
             stderr=result.stderr,
@@ -389,6 +434,12 @@ def build_broker_app(
             )
         async with _backend_errors("close"):
             await backend.close(backend_id)
+        audit.record(
+            "episode.close",
+            job_id=config.job_id,
+            outcome="allowed",
+            episode_id=episode_id,
+        )
         return EpisodeCloseResponse()
 
     return app
