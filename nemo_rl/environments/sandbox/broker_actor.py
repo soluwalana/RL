@@ -43,7 +43,11 @@ from nemo_rl.distributed.virtual_cluster import (
 )
 from nemo_rl.environments.sandbox.backends.registry import build_backend
 from nemo_rl.environments.sandbox.config import BrokerEndpoint, EpisodeBrokerConfig
-from nemo_rl.environments.sandbox.http_app import build_broker_app, close_all_episodes
+from nemo_rl.environments.sandbox.http_app import (
+    begin_shutdown,
+    build_broker_app,
+    close_all_episodes,
+)
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
 
 
@@ -190,6 +194,10 @@ class SandboxEpisodeBrokerActor:
         should shut the job sandbox down first, so in-flight episode calls fail fast rather than
         racing this.
         """
+        if self._app is not None:
+            # Close the door before draining, so nothing new is provisioned behind the drain.
+            begin_shutdown(self._app)
+
         if self._loop is not None and self._app is not None:
             future = asyncio.run_coroutine_threadsafe(
                 close_all_episodes(self._app), self._loop

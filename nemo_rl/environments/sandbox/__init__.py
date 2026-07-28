@@ -33,7 +33,11 @@ from nemo_rl.environments.sandbox.egress import (
     build_egress_policy,
 )
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
-from nemo_rl.environments.sandbox.http_app import build_broker_app, close_all_episodes
+from nemo_rl.environments.sandbox.http_app import (
+    begin_shutdown,
+    build_broker_app,
+    close_all_episodes,
+)
 from nemo_rl.environments.sandbox.sanitize import (
     sanitize_create_request,
     sanitize_exec_request,
@@ -50,6 +54,7 @@ __all__ = [
     "EpisodeSandboxBackend",
     "SanitizedEpisodeSpec",
     "UnsupportedEpisodeOperationError",
+    "begin_shutdown",
     "build_broker_app",
     "build_egress_policy",
     "close_all_episodes",

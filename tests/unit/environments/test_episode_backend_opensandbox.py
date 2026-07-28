@@ -187,14 +187,12 @@ def test_broker_owned_policy_overrides_a_configured_one():
 
 
 @pytest.mark.asyncio
-async def test_create_fails_and_reaps_when_the_policy_did_not_apply():
-    backend = make_backend()
+async def test_strict_verification_fails_and_reaps_when_rules_are_missing():
+    backend = make_backend(verification="strict")
     # Server reports a policy that silently dropped the cluster denials.
     FakeProvider.instances[0].applied_policy = {"defaultAction": "allow", "egress": []}
 
-    with pytest.raises(
-        EpisodeBackendError, match="did not apply the requested egress policy"
-    ):
+    with pytest.raises(EpisodeBackendError, match="did not apply"):
         await backend.create(make_spec())
 
     # A sandbox whose isolation cannot be confirmed is not left running.
@@ -202,7 +200,45 @@ async def test_create_fails_and_reaps_when_the_policy_did_not_apply():
 
 
 @pytest.mark.asyncio
+async def test_default_verification_warns_on_missing_rules_rather_than_failing(caplog):
+    # The sidecar returns a merged, re-serialized policy, so a textual rule difference is more
+    # likely reformatting than a real gap. Failing every episode closed over that would be worse.
+    backend = make_backend()
+    FakeProvider.instances[0].applied_policy = {"defaultAction": "allow", "egress": []}
+
+    with caplog.at_level("WARNING"):
+        assert await backend.create(make_spec()) == "sandbox-1"
+
+    assert FakeProvider.instances[0].closed == []
+    assert "did not report" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reformatted_targets_do_not_count_as_missing():
+    # Go renders the IPv4-mapped prefix we send as ::ffff:0:0/96 in its mixed form, and may
+    # differ in case for other IPv6 literals. Neither is a real gap.
+    backend = make_backend(verification="strict")
+    FakeProvider.instances[0].applied_policy = {
+        "defaultAction": "allow",
+        "egress": [
+            {
+                "action": "deny",
+                "target": "::ffff:0.0.0.0/96"
+                if target == "::ffff:0:0/96"
+                else target.upper(),
+            }
+            for target in DEFAULT_CLUSTER_DENY_TARGETS
+        ],
+    }
+
+    assert await backend.create(make_spec()) == "sandbox-1"
+    assert FakeProvider.instances[0].closed == []
+
+
+@pytest.mark.asyncio
 async def test_create_fails_when_default_action_was_flipped():
+    # Fatal even in the lenient default mode: it is unambiguous, it decides what happens to
+    # everything no rule matches, and create is the only moment it can be set.
     backend = make_backend()
     provider = FakeProvider.instances[0]
     provider.applied_policy = {
@@ -229,10 +265,9 @@ async def test_create_succeeds_when_the_policy_matches():
 
 @pytest.mark.asyncio
 async def test_verification_can_be_disabled():
-    backend = make_backend(verify_egress=False)
-    FakeProvider.instances[
-        0
-    ].applied_policy = None  # get_egress_policy would raise if called
+    backend = make_backend(verification="off")
+    # get_egress_policy raises if called, so this also proves it is not consulted.
+    FakeProvider.instances[0].applied_policy = None
 
     assert await backend.create(make_spec()) == "sandbox-1"
 

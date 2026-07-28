@@ -14,6 +14,7 @@
 
 """Configuration for the trusted episode provisioning broker."""
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -29,6 +30,13 @@ JOB_ID_METADATA_KEY = "nemo-rl-job-id"
 # Reserved for anything the broker itself injects into an episode environment. Nothing uses it
 # today; reserving it now means a caller cannot pre-empt a name the broker later needs to own.
 RESERVED_ENV_PREFIX = "NEMO_RL_"
+
+# Kubernetes label rules. Sandbox metadata becomes pod labels, so both the keys a caller supplies
+# and the job id the broker stamps have to satisfy them.
+K8S_LABEL_KEY_RE = re.compile(
+    r"^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+)
+K8S_LABEL_VALUE_RE = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$")
 
 # The trusted broker buffers every request body, so this cap protects the training leader pod --
 # not the episode. Uploads larger than this must be staged through the episode itself.
@@ -55,9 +63,6 @@ class EpisodeBrokerConfig(BaseModel):
 
     approved_images: tuple[str, ...] = ()
     approved_image_prefixes: tuple[str, ...] = ()
-    # Keys a caller may pass in ``provider_options``. Anything else is rejected rather than
-    # dropped, so an environment fails fast instead of running with silently different options.
-    allowed_provider_option_keys: tuple[str, ...] = ()
 
     default_ttl_s: float = Field(default=300.0, gt=0)
     max_ttl_s: float = Field(default=3600.0, gt=0)
@@ -84,12 +89,37 @@ class EpisodeBrokerConfig(BaseModel):
     # Second key required to run episodes with no egress restriction whatsoever.
     allow_unrestricted_episode_egress: bool = False
 
+    # How hard to check that the egress policy the backend reports matches the one requested.
+    #
+    # ``default_action`` is the default because it is the property that can only be established at
+    # create and that decides what happens to unlisted traffic, and because it is the one a backend
+    # cannot plausibly reformat. ``strict`` additionally requires every requested rule to come back,
+    # which is the stronger guarantee but depends on the backend echoing targets in a comparable
+    # form; the OpenSandbox sidecar re-marshals a merged policy, so turn it on only once a
+    # deployment has shown it round-trips cleanly.
+    egress_verification: Literal["off", "default_action", "strict"] = "default_action"
+
     # Host advertised to the job sandbox. Left unset the broker uses the leader pod IP; set it to a
     # headless-Service DNS name where one exists, so the sandbox egress rule survives a reschedule.
     host: str | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
     port_range_low: int | None = Field(default=None, ge=1, le=65535)
     port_range_high: int | None = Field(default=None, ge=1, le=65535)
+
+    @field_validator("job_id")
+    @classmethod
+    def _check_job_id(cls, value: str) -> str:
+        # The job id is stamped into sandbox metadata, which OpenSandbox turns into a pod label,
+        # and NeMo-Gym's provider silently normalizes label values it cannot use. If that
+        # normalization ever fired, the stored label would stop matching the id we query by and
+        # orphan reconciliation would quietly find nothing. Requiring a label-safe id up front
+        # makes the normalization a no-op instead.
+        if not K8S_LABEL_VALUE_RE.match(value):
+            raise ValueError(
+                f"job_id must be a valid Kubernetes label value (<=63 chars, alphanumeric with "
+                f"'-', '_', '.', starting and ending alphanumeric): {value!r}"
+            )
+        return value
 
     @field_validator("approved_image_prefixes")
     @classmethod

@@ -31,7 +31,6 @@ is a setting; the guarantee here does not rely on it.
 
 import base64
 import binascii
-import re
 
 from nemo_gym.sandbox.broker import (
     BrokerErrorCode,
@@ -44,19 +43,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from nemo_rl.environments.sandbox.backends.base import SanitizedEpisodeSpec
 from nemo_rl.environments.sandbox.config import (
     JOB_ID_METADATA_KEY,
+    K8S_LABEL_KEY_RE,
     RESERVED_ENV_PREFIX,
     RESERVED_METADATA_PREFIX,
     EpisodeBrokerConfig,
 )
 from nemo_rl.environments.sandbox.egress import build_egress_policy
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
-
-
-# Kubernetes label key: an optional DNS-subdomain prefix, then a name of at most 63 characters
-# that starts and ends alphanumeric.
-K8S_LABEL_KEY_RE = re.compile(
-    r"^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
-)
 
 
 class SanitizedExecCall(BaseModel):
@@ -75,25 +68,23 @@ def _reject(code: BrokerErrorCode, message: str, status_code: int) -> None:
     raise BrokerRequestError(code, message, status_code=status_code)
 
 
-def _check_provider_options(
-    request: EpisodeCreateRequest, config: EpisodeBrokerConfig
-) -> None:
-    """Reject provider options the deployment has not explicitly permitted.
+def _check_provider_options(request: EpisodeCreateRequest) -> None:
+    """Reject any provider options at all.
 
-    Rejecting rather than dropping matters: an environment that asked for a privileged option and
-    silently got an unprivileged sandbox would grade under conditions it did not request.
+    The field exists on the wire so a client never has to guess what is permitted, but nothing
+    downstream reads it: a sanitized spec has no provider-options field and the backend builds its
+    create request from named fields only. Accepting a key and then ignoring it would be the exact
+    failure this is meant to prevent -- an environment grading under conditions it did not request.
+    So the answer is always no, and it says which keys were refused.
     """
     if not request.provider_options:
         return
-    disallowed = sorted(
-        set(request.provider_options) - set(config.allowed_provider_option_keys)
+    _reject(
+        BrokerErrorCode.FIELD_NOT_ALLOWED,
+        "provider_options are not accepted by the broker; "
+        f"refused key(s): {', '.join(sorted(request.provider_options))}",
+        400,
     )
-    if disallowed:
-        _reject(
-            BrokerErrorCode.FIELD_NOT_ALLOWED,
-            f"provider_options key(s) not permitted by this deployment: {', '.join(disallowed)}",
-            400,
-        )
 
 
 def _check_image(image: str, config: EpisodeBrokerConfig) -> None:
@@ -221,7 +212,7 @@ def sanitize_create_request(
     Raises:
         BrokerRequestError: If the request asks for anything this deployment does not allow.
     """
-    _check_provider_options(request, config)
+    _check_provider_options(request)
     _check_image(request.image, config)
     _check_resources(request.resources, config)
 
