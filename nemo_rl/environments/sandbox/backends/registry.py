@@ -17,6 +17,7 @@
 from nemo_rl.environments.sandbox.backends.base import EpisodeSandboxBackend
 from nemo_rl.environments.sandbox.backends.memory import InMemoryEpisodeBackend
 from nemo_rl.environments.sandbox.config import EpisodeBrokerConfig
+from nemo_rl.environments.sandbox.egress import build_egress_policy
 
 
 def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
@@ -31,7 +32,6 @@ def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
     Raises:
         ValueError: If the in-memory backend is selected without the explicit insecure opt-in, or
             the backend name is unknown.
-        NotImplementedError: If the backend is known but not implemented yet.
     """
     if config.backend == "memory":
         if not config.allow_insecure_memory_backend:
@@ -42,10 +42,17 @@ def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
         return InMemoryEpisodeBackend()
 
     if config.backend == "opensandbox":
-        raise NotImplementedError(
-            "The OpenSandbox episode backend is not implemented yet. It wraps NeMo-Gym's "
-            "OpenSandboxProvider behind EpisodeSandboxBackend and lands with the broker's backend "
-            "phase; until then only the 'memory' backend is selectable."
+        from nemo_rl.environments.sandbox.backends.opensandbox import (
+            OpenSandboxEpisodeBackend,
+        )
+
+        return OpenSandboxEpisodeBackend(
+            egress=build_egress_policy(
+                default_action=config.egress_default_action,
+                allow_targets=config.egress_allow_targets,
+                deny_targets=config.egress_deny_targets,
+            ),
+            **config.backend_options,
         )
 
     raise ValueError(f"Unknown episode backend: {config.backend!r}")

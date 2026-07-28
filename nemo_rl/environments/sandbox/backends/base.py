@@ -26,6 +26,8 @@ from nemo_gym.sandbox.broker import EpisodeResources
 from nemo_gym.sandbox.providers.base import SandboxExecResult, SandboxStatus
 from pydantic import BaseModel, ConfigDict, Field
 
+from nemo_rl.environments.sandbox.egress import EpisodeEgressPolicy
+
 
 class PlatformMount(BaseModel):
     """A mount the platform owns and the broker injects. Callers can never supply one."""
@@ -36,28 +38,6 @@ class PlatformMount(BaseModel):
     mount_path: str
     sub_path: str | None = None
     read_only: bool = True
-
-
-class EpisodeEgressRule(BaseModel):
-    """One egress allowance for an episode. ``target`` is an FQDN, IP, or CIDR."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    target: str
-    action: str = "allow"
-
-
-class EpisodeEgressPolicy(BaseModel):
-    """Egress policy applied to an episode.
-
-    Always sent explicitly, including when empty: a backend that treats an absent policy as
-    allow-all would otherwise hand an episode unrestricted network access by default.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    default_action: str = "deny"
-    rules: tuple[EpisodeEgressRule, ...] = ()
 
 
 class SanitizedEpisodeSpec(BaseModel):

@@ -26,6 +26,12 @@ from nemo_rl.environments.sandbox.backends.base import (
     UnsupportedEpisodeOperationError,
 )
 from nemo_rl.environments.sandbox.config import BrokerEndpoint, EpisodeBrokerConfig
+from nemo_rl.environments.sandbox.egress import (
+    DEFAULT_CLUSTER_DENY_TARGETS,
+    EpisodeEgressPolicy,
+    EpisodeEgressRule,
+    build_egress_policy,
+)
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
 from nemo_rl.environments.sandbox.http_app import build_broker_app, close_all_episodes
 from nemo_rl.environments.sandbox.sanitize import (
@@ -35,13 +41,17 @@ from nemo_rl.environments.sandbox.sanitize import (
 
 
 __all__ = [
+    "DEFAULT_CLUSTER_DENY_TARGETS",
     "BrokerEndpoint",
     "BrokerRequestError",
     "EpisodeBrokerConfig",
+    "EpisodeEgressPolicy",
+    "EpisodeEgressRule",
     "EpisodeSandboxBackend",
     "SanitizedEpisodeSpec",
     "UnsupportedEpisodeOperationError",
     "build_broker_app",
+    "build_egress_policy",
     "close_all_episodes",
     "sanitize_create_request",
     "sanitize_exec_request",
