@@ -22,12 +22,13 @@ caller supplied can ride along, and establishing the egress policy at the only m
 allows it.
 """
 
+import ipaddress
 import logging
 import tempfile
 from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from nemo_gym.sandbox.providers.base import (
     SandboxExecResult,
@@ -58,6 +59,21 @@ def to_opensandbox_policy(policy: EpisodeEgressPolicy) -> dict[str, Any]:
     }
 
 
+def canonical_egress_target(target: str) -> str:
+    """Canonicalize an egress target so two spellings of the same range compare equal.
+
+    The sidecar does not echo the policy it was given -- it re-serializes a merged one, with
+    operator-managed always-rules and nameserver addresses folded in. Go renders an IPv4-mapped
+    prefix as ``::ffff:0.0.0.0/96`` where we send ``::ffff:0:0/96``, and casing of IPv6 literals is
+    not guaranteed either. Parsing both sides removes that class of false mismatch; anything that
+    is not an address or network is treated as a domain.
+    """
+    try:
+        return str(ipaddress.ip_network(target, strict=False))
+    except ValueError:
+        return target.strip().rstrip(".").lower()
+
+
 class OpenSandboxEpisodeBackend:
     """Episode backend backed by OpenSandbox, via NeMo-Gym's provider.
 
@@ -75,12 +91,12 @@ class OpenSandboxEpisodeBackend:
         create: Mapping[str, Any] | None = None,
         probe: Mapping[str, Any] | None = None,
         operations: Mapping[str, Any] | None = None,
-        verify_egress: bool = True,
+        verification: Literal["off", "default_action", "strict"] = "default_action",
     ) -> None:
         from nemo_gym.sandbox.providers.opensandbox import OpenSandboxProvider
 
         self._egress = egress
-        self._verify_egress = verify_egress
+        self._verification = verification
         # The broker owns the egress policy outright: whatever a deployment puts in the create
         # block, ours is what reaches the SDK.
         create_config = {
@@ -157,8 +173,14 @@ class OpenSandboxEpisodeBackend:
         Setting the policy is enforcement by construction; this is enforcement by verification, so
         a server that ignored the policy, or a deployment whose sidecar is not wired up, surfaces
         as a failed episode rather than as an episode with quietly unrestricted network access.
+
+        ``default_action`` is always fatal when it disagrees: it is unambiguous, it decides what
+        happens to everything no rule matches, and create is the only moment it can be set. Missing
+        *rules* are only fatal under ``strict``, because the sidecar returns a merged, re-serialized
+        policy and a textual difference there is more likely to mean reformatting than a real gap.
+        Failing every episode closed over that would be worse than reporting it.
         """
-        if not self._verify_egress:
+        if self._verification == "off":
             return
         get_policy = getattr(handle.raw, "get_egress_policy", None)
         if get_policy is None:
@@ -170,18 +192,42 @@ class OpenSandboxEpisodeBackend:
 
         applied = await get_policy()
         applied_default = getattr(applied, "default_action", None)
-        applied_rules = {
-            (getattr(rule, "action", None), getattr(rule, "target", None))
+        if applied_default != self._egress.default_action:
+            raise EpisodeBackendError(
+                f"episode {handle.sandbox_id} applied egress default_action="
+                f"{applied_default!r}, expected {self._egress.default_action!r}"
+            )
+
+        applied_targets = {
+            (
+                getattr(rule, "action", None),
+                canonical_egress_target(str(getattr(rule, "target", ""))),
+            )
             for rule in (getattr(applied, "egress", None) or ())
         }
-        expected_rules = {(rule.action, rule.target) for rule in self._egress.rules}
-        missing = expected_rules - applied_rules
+        missing = sorted(
+            (rule.action, rule.target)
+            for rule in self._egress.rules
+            if (rule.action, canonical_egress_target(rule.target))
+            not in applied_targets
+        )
+        if not missing:
+            return
 
-        if applied_default != self._egress.default_action or missing:
+        if self._verification == "strict":
             raise EpisodeBackendError(
-                f"episode {handle.sandbox_id} did not apply the requested egress policy "
-                f"(default_action={applied_default!r}, missing_rules={sorted(missing)})"
+                f"episode {handle.sandbox_id} did not apply {len(missing)} requested egress "
+                f"rule(s); first few: {missing[:5]}"
             )
+        LOGGER.warning(
+            "Episode %s did not report %d requested egress rule(s) (first few: %s). The default "
+            "action matched, so this may be the sidecar re-serializing a merged policy rather "
+            "than a real gap. Set egress_verification='strict' once a deployment is known to "
+            "round-trip rules cleanly.",
+            handle.sandbox_id,
+            len(missing),
+            missing[:5],
+        )
 
     async def create(self, spec: SanitizedEpisodeSpec) -> str:
         """Create one episode sandbox and confirm its egress policy took effect."""

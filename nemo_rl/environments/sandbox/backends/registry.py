@@ -52,6 +52,7 @@ def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
                 allow_targets=config.egress_allow_targets,
                 deny_targets=config.egress_deny_targets,
             ),
+            verification=config.egress_verification,
             **config.backend_options,
         )
 

@@ -216,6 +216,9 @@ def build_broker_app(
     app.state.backend = backend
     app.state.config = config
     app.state.episodes = episodes
+    # Set before teardown drains, so nothing new can be provisioned behind the drain. See
+    # begin_shutdown.
+    app.state.closing = False
 
     def _authenticate(request: Request) -> None:
         provided = request.headers.get(BROKER_AUTH_HEADER)
@@ -235,10 +238,16 @@ def build_broker_app(
         request: Request, exc: BrokerRequestError
     ) -> JSONResponse:
         # Every refusal funnels through here, so this is the one place that has to record them.
+        # A backend outage or a shutdown is not a policy denial; keeping them apart is what lets
+        # someone filter the log for "what did this environment try that we refused".
+        failed = exc.code in (
+            BrokerErrorCode.BACKEND_ERROR,
+            BrokerErrorCode.SHUTTING_DOWN,
+        )
         audit.record(
-            "request.rejected",
+            "request.rejected" if not failed else "request.failed",
             job_id=config.job_id,
-            outcome="rejected",
+            outcome="failed" if failed else "rejected",
             method=request.method,
             path=request.url.path,
             code=exc.code.value,
@@ -298,6 +307,14 @@ def build_broker_app(
     )
     async def create_episode(request: EpisodeCreateRequest) -> EpisodeCreateResponse:
         """Create one episode sandbox from a sanitized spec."""
+        if app.state.closing:
+            # Refusing here is what makes teardown correct rather than merely conventional: an
+            # episode created behind the drain would never be reaped.
+            raise BrokerRequestError(
+                BrokerErrorCode.SHUTTING_DOWN,
+                "broker is shutting down and will not create new episodes",
+                status_code=503,
+            )
         spec = sanitize_create_request(request, config)
         episode_id = await episodes.reserve()
 
@@ -382,10 +399,17 @@ def build_broker_app(
     ) -> Response:
         """Write one file into an episode."""
         backend_id = await episodes.resolve(episode_id)
+        content = base64.b64decode(request.content_b64)
         async with _backend_errors("upload"):
-            await backend.upload_file(
-                backend_id, request.path, base64.b64decode(request.content_b64)
-            )
+            await backend.upload_file(backend_id, request.path, content)
+        audit.record(
+            "episode.file.upload",
+            job_id=config.job_id,
+            outcome="allowed",
+            episode_id=episode_id,
+            path=request.path,
+            bytes=len(content),
+        )
         return Response(status_code=204)
 
     @app.get(
@@ -416,6 +440,14 @@ def build_broker_app(
                 f"file exceeds the {config.max_request_bytes} byte transfer limit: {path}",
                 status_code=413,
             )
+        audit.record(
+            "episode.file.download",
+            job_id=config.job_id,
+            outcome="allowed",
+            episode_id=episode_id,
+            path=path,
+            bytes=len(content),
+        )
         return EpisodeFileDownloadResponse(
             content_b64=base64.b64encode(content).decode()
         )
@@ -443,6 +475,17 @@ def build_broker_app(
         return EpisodeCloseResponse()
 
     return app
+
+
+def begin_shutdown(app: FastAPI) -> None:
+    """Stop accepting new episodes, without disturbing the ones already running.
+
+    Call this before :func:`close_all_episodes`. Draining while the listener still accepts creates
+    leaves a window where the job sandbox can provision an episode the drain has already walked
+    past, which would then never be reaped. Operating and closing existing episodes keeps working,
+    because teardown depends on it.
+    """
+    app.state.closing = True
 
 
 async def close_all_episodes(app: FastAPI) -> None:

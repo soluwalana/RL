@@ -222,7 +222,9 @@ def test_snapshot_id_cannot_bypass_the_image_allowlist(client):
     assert response.status_code == 422
 
 
-def test_provider_options_are_rejected_by_default(client):
+def test_provider_options_are_always_rejected(client):
+    # Nothing downstream reads provider_options, so accepting a key would mean silently ignoring
+    # it -- an environment grading under conditions it did not request.
     response = client.post(
         "/episodes",
         json={"image": APPROVED_IMAGE, "provider_options": {"snapshot_id": "s"}},
@@ -233,24 +235,6 @@ def test_provider_options_are_rejected_by_default(client):
     assert body["code"] == "field_not_allowed"
     # Naming the offending key is what lets a rejected environment be debugged.
     assert "snapshot_id" in body["error"]
-
-
-def test_allowed_provider_option_keys_pass(backend):
-    config = make_config(allowed_provider_option_keys=("skip_health_check",))
-    app = build_broker_app(backend=backend, config=config, token=TOKEN)
-    with TestClient(app) as client:
-        client.headers.update({BROKER_AUTH_HEADER: TOKEN})
-        response = client.post(
-            "/episodes",
-            json={
-                "image": APPROVED_IMAGE,
-                "provider_options": {"skip_health_check": True},
-            },
-        )
-
-    assert response.status_code == 201
-    # Permitted or not, the option never reaches the backend spec in this phase.
-    assert not hasattr(backend.specs[0], "provider_options")
 
 
 def test_unapproved_image_is_refused(client):
@@ -846,3 +830,101 @@ def test_broker_endpoint_keeps_the_token_out_of_repr():
 
     assert "s3cret-token" not in repr(endpoint)
     assert endpoint.token == "s3cret-token"
+
+
+# --------------------------------------------------------------------------------------------
+# Shutdown
+# --------------------------------------------------------------------------------------------
+
+
+def test_shutdown_refuses_new_episodes_but_still_serves_existing_ones(client, backend):
+    from nemo_rl.environments.sandbox.http_app import begin_shutdown
+
+    episode_id = create_episode(client)
+    begin_shutdown(client.app)
+
+    refused = client.post("/episodes", json={"image": APPROVED_IMAGE})
+    assert refused.status_code == 503
+    assert refused.json()["code"] == "shutting_down"
+
+    # Teardown depends on being able to operate and close what is already running.
+    assert (
+        client.post(f"/episodes/{episode_id}/exec", json={"command": "ls"}).status_code
+        == 200
+    )
+    assert client.delete(f"/episodes/{episode_id}").status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_provisioned_behind_the_drain(backend):
+    from nemo_rl.environments.sandbox.http_app import begin_shutdown
+
+    app = build_broker_app(backend=backend, config=make_config(), token=TOKEN)
+    with TestClient(app) as shutting_down:
+        shutting_down.headers.update({BROKER_AUTH_HEADER: TOKEN})
+        create_episode(shutting_down)
+
+        begin_shutdown(app)
+        assert (
+            shutting_down.post("/episodes", json={"image": APPROVED_IMAGE}).status_code
+            == 503
+        )
+        await close_all_episodes(app)
+
+        # Everything that existed was reaped, and nothing slipped in past the drain.
+        assert len(backend.closed) == 1
+        assert await app.state.episodes.size() == 0
+
+
+def test_job_id_must_be_label_safe():
+    # The job id is stamped as a pod label; a value the provider would silently normalize would
+    # stop matching the id reconciliation queries by.
+    for bad in ["job/one", "a" * 64, "-leading", "trailing-", "job:1"]:
+        with pytest.raises(ValueError, match="label value"):
+            EpisodeBrokerConfig(job_id=bad)
+
+    assert (
+        EpisodeBrokerConfig(job_id="job-1.customizer_2").job_id == "job-1.customizer_2"
+    )
+
+
+# --------------------------------------------------------------------------------------------
+# Audit taxonomy and file events
+# --------------------------------------------------------------------------------------------
+
+
+def test_backend_failures_are_audited_as_failed_not_rejected(caplog):
+    failing_backend = RecordingBackend(fail_on="create")
+    app = build_broker_app(backend=failing_backend, config=make_config(), token=TOKEN)
+
+    with (
+        caplog.at_level("INFO", logger="nemo_rl.environments.sandbox.audit"),
+        TestClient(app, raise_server_exceptions=False) as failing,
+    ):
+        failing.headers.update({BROKER_AUTH_HEADER: TOKEN})
+        failing.post("/episodes", json={"image": APPROVED_IMAGE})
+
+    event = _audit_events(caplog)[0]
+    # An outage is not a policy denial; filtering the log for denials must not surface it.
+    assert event["outcome"] == "failed"
+    assert event["event"] == "request.failed"
+    assert event["code"] == "backend_error"
+
+
+def test_file_transfers_are_audited(client, caplog):
+    episode_id = create_episode(client)
+
+    with caplog.at_level("INFO", logger="nemo_rl.environments.sandbox.audit"):
+        client.put(
+            f"/episodes/{episode_id}/files",
+            json={"path": "/work/f.txt", "content_b64": B64_HELLO},
+        )
+        client.get(f"/episodes/{episode_id}/files", params={"path": "/work/f.txt"})
+
+    events = _audit_events(caplog)
+    assert [event["event"] for event in events] == [
+        "episode.file.upload",
+        "episode.file.download",
+    ]
+    assert all(event["path"] == "/work/f.txt" for event in events)
+    assert all(event["bytes"] == len(b"hello") for event in events)
