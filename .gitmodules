@@ -10,6 +10,6 @@
 	shallow = true
 [submodule "3rdparty/Gym-workspace/Gym"]
 	path = 3rdparty/Gym-workspace/Gym
-	url = git@github.com:soluwalana/Gym.git
+	url = https://github.com/soluwalana/Gym.git
 	branch = nmp/customizer
 	shallow = true
