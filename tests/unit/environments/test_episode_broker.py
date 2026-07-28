@@ -691,3 +691,158 @@ def test_deny_by_default_needs_no_opt_in():
         ).egress_default_action
         == "deny"
     )
+
+
+# --------------------------------------------------------------------------------------------
+# Metadata and environment validation
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_key", ["Not A Label", "-leading-dash", "trailing-dash-", "a" * 64, ""]
+)
+def test_metadata_keys_must_be_valid_kubernetes_labels(client, bad_key):
+    # OpenSandbox turns metadata into pod labels, so an invalid key would otherwise surface as an
+    # opaque backend error rather than something the environment can act on.
+    response = client.post(
+        "/episodes", json={"image": APPROVED_IMAGE, "metadata": {bad_key: "v"}}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+
+
+def test_prefixed_metadata_keys_are_accepted(client):
+    assert (
+        client.post(
+            "/episodes",
+            json={"image": APPROVED_IMAGE, "metadata": {"example.com/suite": "swe"}},
+        ).status_code
+        == 201
+    )
+
+
+def test_broker_reserved_env_prefix_is_refused(client):
+    response = client.post(
+        "/episodes",
+        json={"image": APPROVED_IMAGE, "env": {"NEMO_RL_BROKER_TOKEN": "hijack"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "field_not_allowed"
+
+
+def test_ordinary_env_passes_through_including_credential_shaped_names(client, backend):
+    # A caller setting a credential name supplies its own worthless value; it does not obtain
+    # ours, and the variable lands inside an already-isolated episode. Refusing it would buy
+    # nothing and break images that legitimately read these names.
+    create_episode(
+        client,
+        env={"OPEN_SANDBOX_API_KEY": "not-a-real-key", "LD_PRELOAD": "/tmp/x.so"},
+    )
+
+    assert backend.specs[0].env["OPEN_SANDBOX_API_KEY"] == "not-a-real-key"
+
+
+@pytest.mark.parametrize("bad_env", [{"WITH=EQUALS": "v"}, {"": "v"}, {"NUL\x00": "v"}])
+def test_structurally_invalid_env_names_are_refused(client, bad_env):
+    response = client.post("/episodes", json={"image": APPROVED_IMAGE, "env": bad_env})
+
+    assert response.status_code == 400
+
+
+# --------------------------------------------------------------------------------------------
+# Audit log
+# --------------------------------------------------------------------------------------------
+
+
+def _audit_events(caplog) -> list[dict]:
+    import json
+
+    return [
+        json.loads(record.message.removeprefix("episode-broker "))
+        for record in caplog.records
+        if record.name == "nemo_rl.environments.sandbox.audit"
+    ]
+
+
+def test_allowed_operations_are_audited(client, caplog):
+    with caplog.at_level("INFO", logger="nemo_rl.environments.sandbox.audit"):
+        episode_id = create_episode(client)
+        client.post(
+            f"/episodes/{episode_id}/exec",
+            json={"command": "pytest -q", "user": "root"},
+        )
+        client.delete(f"/episodes/{episode_id}")
+
+    events = _audit_events(caplog)
+    assert [event["event"] for event in events] == [
+        "episode.create",
+        "episode.exec",
+        "episode.close",
+    ]
+    assert events[0]["image"] == APPROVED_IMAGE
+    assert events[1]["user"] == "root"
+    assert events[1]["command"] == "pytest -q"
+    assert all(event["job_id"] == "job-1" for event in events)
+
+
+def test_refusals_are_audited_with_their_reason(client, caplog):
+    with caplog.at_level("INFO", logger="nemo_rl.environments.sandbox.audit"):
+        client.post("/episodes", json={"image": "docker.io/attacker/evil:latest"})
+
+    event = _audit_events(caplog)[0]
+    assert event["event"] == "request.rejected"
+    assert event["outcome"] == "rejected"
+    assert event["code"] == "image_not_approved"
+    assert event["status"] == 403
+
+
+def test_unauthorized_requests_are_audited(backend, caplog):
+    app = build_broker_app(backend=backend, config=make_config(), token=TOKEN)
+    with (
+        caplog.at_level("INFO", logger="nemo_rl.environments.sandbox.audit"),
+        TestClient(app) as anon,
+    ):
+        anon.get("/health")
+
+    assert _audit_events(caplog)[0]["code"] == "unauthorized"
+
+
+def test_audit_log_never_carries_env_values_or_secrets(client, caplog):
+    with caplog.at_level("INFO", logger="nemo_rl.environments.sandbox.audit"):
+        episode_id = create_episode(client, env={"TENANT_SECRET": "s3cret"})
+        client.post(
+            f"/episodes/{episode_id}/exec",
+            json={"command": "true", "env": {"ANOTHER_SECRET": "hunter2"}},
+        )
+
+    text = "\n".join(record.message for record in caplog.records)
+    assert "s3cret" not in text
+    assert "hunter2" not in text
+    assert TOKEN not in text
+    # Keys are kept: they are what makes a rejected episode debuggable.
+    assert "ANOTHER_SECRET" in text
+
+
+def test_long_commands_are_truncated_in_the_audit_log(client, caplog):
+    with caplog.at_level("INFO", logger="nemo_rl.environments.sandbox.audit"):
+        episode_id = create_episode(client)
+        client.post(f"/episodes/{episode_id}/exec", json={"command": "x" * 5000})
+
+    exec_event = [
+        event for event in _audit_events(caplog) if event["event"] == "episode.exec"
+    ][0]
+    assert len(exec_event["command"]) < 300
+    assert "more]" in exec_event["command"]
+
+
+def test_broker_endpoint_keeps_the_token_out_of_repr():
+    from nemo_rl.environments.sandbox.config import BrokerEndpoint
+
+    endpoint = BrokerEndpoint(
+        url="http://10.0.0.1:5001", host="10.0.0.1", port=5001, token="s3cret-token"
+    )
+
+    assert "s3cret-token" not in repr(endpoint)
+    assert endpoint.token == "s3cret-token"

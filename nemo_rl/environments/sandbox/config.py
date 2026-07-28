@@ -26,6 +26,10 @@ from nemo_rl.environments.sandbox.egress import DEFAULT_CLUSTER_DENY_TARGETS
 RESERVED_METADATA_PREFIX = "nemo-rl-"
 JOB_ID_METADATA_KEY = "nemo-rl-job-id"
 
+# Reserved for anything the broker itself injects into an episode environment. Nothing uses it
+# today; reserving it now means a caller cannot pre-empt a name the broker later needs to own.
+RESERVED_ENV_PREFIX = "NEMO_RL_"
+
 # The trusted broker buffers every request body, so this cap protects the training leader pod --
 # not the episode. Uploads larger than this must be staged through the episode itself.
 DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024
