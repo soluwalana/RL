@@ -63,6 +63,9 @@ ACTOR_ENVIRONMENT_REGISTRY: dict[str, str] = {
     # The episode broker shares the NeMo-Gym environment: it imports the broker wire contract from
     # nemo_gym and its OpenSandbox backend needs the SDK that nemo_gym[sandbox] pulls in.
     "nemo_rl.environments.sandbox.broker_actor.SandboxEpisodeBrokerActor": PY_EXECUTABLES.NEMO_GYM,
+    # SandboxedGymActor talks to OpenSandbox via nemo_gym[sandbox] and reuses Gym
+    # postprocessing helpers; it does not import user environment code.
+    "nemo_rl.environments.sandbox.nemo_gym_actor.SandboxedGymActor": PY_EXECUTABLES.NEMO_GYM,
 }
 
 from nemo_rl.modelopt.registry import MODELOPT_ACTOR_REGISTRY

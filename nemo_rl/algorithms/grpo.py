@@ -605,6 +605,23 @@ def setup(
     def _spinup_nemo_gym(base_urls, model_name):
         """Spin up the NeMo Gym actor against the given generation server URLs."""
         t0 = time.perf_counter()
+        if env_configs.get("nemo_gym", {}).get("sandboxed"):
+            from nemo_rl.environments.nemo_gym import spinup_nemo_gym_actor
+
+            actor = spinup_nemo_gym_actor(
+                env_configs,
+                base_urls,
+                model_name,
+                enable_router_replay=router_replay_enabled(policy_config),
+                routed_experts_dtype=(
+                    resolve_routed_experts_dtype_name_for_model(model_name)
+                    if router_replay_enabled(policy_config)
+                    else "int16"
+                ),
+                use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
+            )
+            return actor, time.perf_counter() - t0
+
         nemo_gym_py_exec = get_actor_python_env("nemo_rl.environments.nemo_gym.NemoGym")
         if nemo_gym_py_exec.startswith("uv"):
             nemo_gym_py_exec = create_local_venv_on_each_node(
@@ -617,6 +634,16 @@ def setup(
             "invalid_tool_call_patterns", None
         )
         thinking_tags = nemo_gym_dict.pop("thinking_tags", None)
+        # Sandboxed-mode keys never belong in Gym's colocated global config.
+        for key in (
+            "sandboxed",
+            "host_provider",
+            "environment_path",
+            "sandbox",
+            "job_id",
+            "episode_broker",
+        ):
+            nemo_gym_dict.pop(key, None)
         # Pass prebuilt cache + venv dirs through the global config so the gym reuses
         # image-baked venvs instead of rebuilding them.
         uv_cache_dir = get_nemo_gym_uv_cache_dir()
