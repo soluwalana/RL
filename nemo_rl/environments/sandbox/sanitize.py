@@ -46,6 +46,7 @@ from nemo_rl.environments.sandbox.config import (
     RESERVED_METADATA_PREFIX,
     EpisodeBrokerConfig,
 )
+from nemo_rl.environments.sandbox.egress import build_egress_policy
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
 
 
@@ -209,9 +210,15 @@ def sanitize_create_request(
         if request.entrypoint is not None
         else None,
         files=_decode_files(request),
-        # Mounts and egress are platform-owned. A caller has no way to name either, and both stay
-        # closed here until the platform supplies job-scoped values.
+        # Mounts and egress are platform-owned; a caller has no way to name either. No shipped
+        # NeMo-Gym agent mounts anything into an episode -- content arrives through staged files --
+        # so mounts stay empty until something concrete needs them.
         mounts=(),
+        egress=build_egress_policy(
+            default_action=config.egress_default_action,
+            allow_targets=config.egress_allow_targets,
+            deny_targets=config.egress_deny_targets,
+        ),
     )
 
 

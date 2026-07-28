@@ -16,8 +16,6 @@
 
 from nemo_rl.environments.sandbox.backends.base import (
     EpisodeBackendError,
-    EpisodeEgressPolicy,
-    EpisodeEgressRule,
     EpisodeSandboxBackend,
     PlatformMount,
     SanitizedEpisodeSpec,
@@ -28,8 +26,6 @@ from nemo_rl.environments.sandbox.backends.registry import build_backend
 
 __all__ = [
     "EpisodeBackendError",
-    "EpisodeEgressPolicy",
-    "EpisodeEgressRule",
     "EpisodeSandboxBackend",
     "PlatformMount",
     "SanitizedEpisodeSpec",

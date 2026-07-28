@@ -322,14 +322,17 @@ def test_job_id_is_stamped_into_backend_metadata(client, backend):
     assert spec.job_id == "job-1"
 
 
-def test_mounts_and_egress_default_closed(client, backend):
+def test_mounts_stay_empty_and_egress_denies_cluster_ranges(client, backend):
     create_episode(client)
 
     spec = backend.specs[0]
     assert spec.mounts == ()
-    # Sent explicitly so a backend cannot fall back to its own allow-all default.
-    assert spec.egress.default_action == "deny"
-    assert spec.egress.rules == ()
+    # Allow-by-default: the threat is reaching another tenant, not reaching the internet, and
+    # graders legitimately install packages mid-episode.
+    assert spec.egress.default_action == "allow"
+    denied = {rule.target for rule in spec.egress.rules if rule.action == "deny"}
+    # The ranges most likely to be forgotten, and most costly to forget.
+    assert {"10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "::ffff:0:0/96"} <= denied
 
 
 # --------------------------------------------------------------------------------------------
@@ -661,6 +664,30 @@ def test_memory_backend_requires_an_explicit_insecure_opt_in():
     assert backend.name == "memory"
 
 
-def test_opensandbox_backend_is_not_wired_yet():
-    with pytest.raises(NotImplementedError, match="OpenSandbox episode backend"):
-        build_backend(EpisodeBrokerConfig(job_id="job-1", backend="opensandbox"))
+def test_unrestricted_egress_requires_an_explicit_opt_in():
+    with pytest.raises(ValueError, match="allow_unrestricted_episode_egress"):
+        EpisodeBrokerConfig(
+            job_id="job-1",
+            egress_default_action="allow",
+            egress_deny_targets=(),
+        )
+
+    config = EpisodeBrokerConfig(
+        job_id="job-1",
+        egress_default_action="allow",
+        egress_deny_targets=(),
+        allow_unrestricted_episode_egress=True,
+    )
+    assert config.egress_deny_targets == ()
+
+
+def test_deny_by_default_needs_no_opt_in():
+    # Nothing reachable unless allowed is always a safe configuration to express.
+    assert (
+        EpisodeBrokerConfig(
+            job_id="job-1",
+            egress_default_action="deny",
+            egress_deny_targets=(),
+        ).egress_default_action
+        == "deny"
+    )

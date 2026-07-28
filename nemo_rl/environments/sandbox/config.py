@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nemo_rl.environments.sandbox.egress import DEFAULT_CLUSTER_DENY_TARGETS
+
 
 # Metadata keys the broker owns. A caller may not set them, so a backend label can always be
 # trusted to say which job an episode belongs to.
@@ -69,6 +71,15 @@ class EpisodeBrokerConfig(BaseModel):
     # Episode sandboxes grade model output on CPU; GPUs are opt-in per deployment.
     max_gpu: int = Field(default=0, ge=0)
 
+    # Egress. Allow-by-default with cluster ranges denied, because the threat is reaching another
+    # tenant rather than reaching the internet -- graders legitimately install packages mid-episode.
+    # See nemo_rl.environments.sandbox.egress for why this fails open and what backs it up.
+    egress_default_action: Literal["allow", "deny"] = "allow"
+    egress_deny_targets: tuple[str, ...] = DEFAULT_CLUSTER_DENY_TARGETS
+    egress_allow_targets: tuple[str, ...] = ()
+    # Second key required to run episodes with no egress restriction whatsoever.
+    allow_unrestricted_episode_egress: bool = False
+
     # Host advertised to the job sandbox. Left unset the broker uses the leader pod IP; set it to a
     # headless-Service DNS name where one exists, so the sandbox egress rule survives a reschedule.
     host: str | None = None
@@ -99,6 +110,19 @@ class EpisodeBrokerConfig(BaseModel):
             raise ValueError("port_range_low and port_range_high must be set together")
         if low is not None and high is not None and low >= high:
             raise ValueError("port_range_low must be less than port_range_high")
+        if (
+            self.egress_default_action == "allow"
+            and not self.egress_deny_targets
+            and not self.allow_unrestricted_episode_egress
+        ):
+            # Allow-by-default with nothing denied is an episode that can reach every pod and
+            # Service in the cluster. Reachable only by saying so explicitly.
+            raise ValueError(
+                "egress_default_action='allow' with an empty egress_deny_targets places no "
+                "restriction on episode network access. Set "
+                "allow_unrestricted_episode_egress=true to accept that, or supply the cluster's "
+                "private ranges in egress_deny_targets."
+            )
         return self
 
 
