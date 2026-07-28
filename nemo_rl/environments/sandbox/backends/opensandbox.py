@@ -285,12 +285,6 @@ class OpenSandboxEpisodeBackend:
             await self._provider.download_file(handle, path, target)
             return target.read_bytes()
 
-    async def close(self, backend_id: str) -> None:
-        """Terminate the episode. Idempotent."""
-        handle = self._handles.pop(backend_id, None)
-        if handle is None:
-            return
-        await self._provider.close(handle)
 
     async def list_backend_ids(self, job_id: str) -> list[str]:
         """List episodes OpenSandbox believes belong to ``job_id``.
@@ -320,6 +314,13 @@ class OpenSandboxEpisodeBackend:
                 page += 1
         finally:
             await manager.close()
+
+    async def close(self, backend_id: str) -> None:
+        """Terminate the episode. Idempotent."""
+        handle = self._handles.pop(backend_id, None)
+        if handle is None:
+            return
+        await self._provider.close(handle)
 
     async def aclose(self) -> None:
         """Release provider-scoped resources."""
