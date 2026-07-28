@@ -33,6 +33,14 @@ from nemo_rl.environments.sandbox.egress import (
     build_egress_policy,
 )
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
+from nemo_rl.environments.sandbox.host.models import (
+    GymHostEgressRule,
+    GymHostHandle,
+    GymHostSpec,
+    GymHostVolumeMount,
+    NemoGymSandboxedConfig,
+    SandboxConfig,
+)
 from nemo_rl.environments.sandbox.http_app import (
     begin_shutdown,
     build_broker_app,
@@ -52,6 +60,12 @@ __all__ = [
     "EpisodeEgressPolicy",
     "EpisodeEgressRule",
     "EpisodeSandboxBackend",
+    "GymHostEgressRule",
+    "GymHostHandle",
+    "GymHostSpec",
+    "GymHostVolumeMount",
+    "NemoGymSandboxedConfig",
+    "SandboxConfig",
     "SanitizedEpisodeSpec",
     "UnsupportedEpisodeOperationError",
     "begin_shutdown",

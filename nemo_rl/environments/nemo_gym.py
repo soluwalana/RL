@@ -2138,6 +2138,18 @@ def _build_gym_actor_config(
     # dict-shaped top-level keys are parsed as server instance configs.
     for key in SHARDING_CONFIG_KEYS:
         nemo_gym_dict.pop(key, None)
+    # Sandboxed-mode keys and the colocated affinity hint never belong in Gym's
+    # global config. A dict-shaped value there is parsed as a server instance.
+    for key in (
+        "sandboxed",
+        "host_provider",
+        "environment_path",
+        "sandbox",
+        "job_id",
+        "episode_broker",
+        "num_gpu_nodes",
+    ):
+        nemo_gym_dict.pop(key, None)
 
     # NeMo-RL-side detection knobs are top-level NemoGymConfig fields
     # (where the detector reads them), not part of Gym's global config.
@@ -2379,6 +2391,66 @@ def as_nemo_gym_shard_set(environment: Any) -> NemoGymShardSet:
     return NemoGymShardSet(handles={DEFAULT_SHARD_NAME: [environment]})
 
 
+def _build_sandboxed_gym_actor(
+    nemo_gym_dict: dict[str, Any],
+    *,
+    base_urls: list[str],
+    model_name: str,
+    enable_router_replay: bool,
+    use_fastokens: bool,
+    token_capture: Optional[dict[str, Any]],
+) -> NemoGymShardSet:
+    """Provision ``SandboxedGymActor`` instead of the colocated ``NemoGym`` actor.
+
+    The sandbox keys are peeled off first so the remainder is still a Gym global
+    config. This actor takes the tokenizer per rollout, so spinup does not call
+    ``set_tokenizer``.
+    """
+    from nemo_rl.environments.sandbox.host.models import NemoGymSandboxedConfig
+    from nemo_rl.environments.sandbox.nemo_gym_actor import (
+        SANDBOXED_GYM_ACTOR_FQN,
+        SandboxedGymActor,
+    )
+
+    gym_dict = dict(nemo_gym_dict)
+    sandboxed_cfg = NemoGymSandboxedConfig.model_validate(
+        {
+            "sandboxed": True,
+            "host_provider": gym_dict.pop("host_provider", "opensandbox"),
+            "environment_path": gym_dict.pop("environment_path", None),
+            "sandbox": gym_dict.pop("sandbox", None),
+            "job_id": gym_dict.pop("job_id", None),
+            "episode_broker": gym_dict.pop("episode_broker", None) or {},
+        }
+    )
+    gym_dict.pop("sandboxed", None)
+    actor_config = dict(
+        _build_gym_actor_config(
+            gym_dict,
+            base_urls=base_urls,
+            model_name=model_name,
+            enable_router_replay=enable_router_replay,
+            use_fastokens=use_fastokens,
+            token_capture=token_capture,
+        )
+    )
+    actor_config["sandboxed"] = sandboxed_cfg.model_dump(mode="python")
+
+    actor = SandboxedGymActor.options(
+        runtime_env=make_actor_runtime_env(SANDBOXED_GYM_ACTOR_FQN)
+    ).remote(actor_config)
+    shard_set = NemoGymShardSet(handles={DEFAULT_SHARD_NAME: [actor]})
+    try:
+        ray.get(actor._spinup.remote())
+    except BaseException:
+        shard_set.shutdown(
+            timeout=NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S,
+            force_kill=True,
+        )
+        raise
+    return shard_set
+
+
 def build_nemo_gym_actors(
     env_configs: dict[str, Any],
     *,
@@ -2413,6 +2485,15 @@ def build_nemo_gym_actors(
             actors already created are torn down first.
     """
     nemo_gym_dict = dict(env_configs["nemo_gym"])
+    if nemo_gym_dict.get("sandboxed"):
+        return _build_sandboxed_gym_actor(
+            nemo_gym_dict,
+            base_urls=base_urls,
+            model_name=model_name,
+            enable_router_replay=enable_router_replay,
+            use_fastokens=use_fastokens,
+            token_capture=token_capture,
+        )
     plan = parse_shard_plan(nemo_gym_dict)
 
     if plan is None:

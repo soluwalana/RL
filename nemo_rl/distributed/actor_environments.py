@@ -110,6 +110,9 @@ ACTOR_ENVIRONMENTS: dict[str, list[str] | None] = {
     # The episode broker imports the broker wire contract from nemo_gym, and its
     # OpenSandbox backend needs the SDK that nemo_gym[sandbox] pulls in.
     "nemo_rl.environments.sandbox.broker_actor.SandboxEpisodeBrokerActor": ["nemo_gym"],
+    # SandboxedGymActor talks to OpenSandbox through that same extra and reuses
+    # Gym postprocessing helpers. It does not import user environment code.
+    "nemo_rl.environments.sandbox.nemo_gym_actor.SandboxedGymActor": ["nemo_gym"],
     # ModelOpt quantization-aware workers
     "nemo_rl.modelopt.models.generation.vllm_quant_worker.VllmQuantGenerationWorker": [
         "modelopt",
