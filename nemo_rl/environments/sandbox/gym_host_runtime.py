@@ -21,8 +21,6 @@ Imports only the standard library and ``nemo_gym`` at runtime: the module source
 injected verbatim into the sandbox image, where ``nemo_rl`` may not be importable.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os

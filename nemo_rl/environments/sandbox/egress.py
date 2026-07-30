@@ -20,8 +20,6 @@ safe public IPv4 CIDRs and public DNS suffixes; private, metadata, loopback,
 CGNAT, multicast, and reserved addresses remain blocked by omission.
 """
 
-from __future__ import annotations
-
 import ipaddress
 from functools import lru_cache
 from typing import Iterable, Literal

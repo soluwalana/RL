@@ -87,9 +87,7 @@ def sandboxed_tokenizer():
 
 @pytest.fixture
 def sandboxed_sanity_inputs():
-    fpath = (
-        Path(__file__).parent / "nemo_gym_test_data/test_nemo_gym_sanity.json"
-    )
+    fpath = Path(__file__).parent / "nemo_gym_test_data/test_nemo_gym_sanity.json"
     with open(fpath) as f:
         data = json.load(f)
     examples = deepcopy(data["input"])
@@ -99,6 +97,8 @@ def sandboxed_sanity_inputs():
             "agent_ref",
             {"name": "example_multi_step_simple_agent", "type": "responses_api_agents"},
         )
+        # Force parallel_tool_calls to True to avoid vLLM dropping tool calls from responses in Qwen 3.5 models.
+        example["responses_create_params"]["parallel_tool_calls"] = True
     return examples
 
 
