@@ -17,7 +17,7 @@
 from nemo_rl.environments.sandbox.backends.base import EpisodeSandboxBackend
 from nemo_rl.environments.sandbox.backends.memory import InMemoryEpisodeBackend
 from nemo_rl.environments.sandbox.config import EpisodeBrokerConfig
-from nemo_rl.environments.sandbox.egress import build_egress_policy
+from nemo_rl.environments.sandbox.egress import build_sandbox_egress_policy
 
 
 def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
@@ -47,10 +47,11 @@ def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
         )
 
         return OpenSandboxEpisodeBackend(
-            egress=build_egress_policy(
-                default_action=config.egress_default_action,
-                allow_targets=config.egress_allow_targets,
-                deny_targets=config.egress_deny_targets,
+            egress=build_sandbox_egress_policy(
+                endpoint_targets=config.egress_allow_targets,
+                allow_internet=config.allow_internet,
+                public_dns_allow=config.public_dns_allow,
+                resolver_addresses=config.resolver_addresses,
             ),
             verification=config.egress_verification,
             **config.backend_options,

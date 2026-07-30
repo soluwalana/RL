@@ -27,12 +27,23 @@ from nemo_rl.environments.sandbox.backends.base import (
 )
 from nemo_rl.environments.sandbox.config import BrokerEndpoint, EpisodeBrokerConfig
 from nemo_rl.environments.sandbox.egress import (
-    DEFAULT_CLUSTER_DENY_TARGETS,
+    DEFAULT_PUBLIC_DNS_SUFFIXES,
     EpisodeEgressPolicy,
     EpisodeEgressRule,
     build_egress_policy,
+    build_sandbox_egress_policy,
+    denied_cidrs,
+    local_resolver_addresses,
 )
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
+from nemo_rl.environments.sandbox.host.models import (
+    GymHostEgressRule,
+    GymHostHandle,
+    GymHostSpec,
+    GymHostVolumeMount,
+    NemoGymSandboxedConfig,
+    SandboxConfig,
+)
 from nemo_rl.environments.sandbox.http_app import (
     begin_shutdown,
     build_broker_app,
@@ -45,18 +56,27 @@ from nemo_rl.environments.sandbox.sanitize import (
 
 
 __all__ = [
-    "DEFAULT_CLUSTER_DENY_TARGETS",
+    "DEFAULT_PUBLIC_DNS_SUFFIXES",
     "BrokerEndpoint",
     "BrokerRequestError",
     "EpisodeBrokerConfig",
     "EpisodeEgressPolicy",
     "EpisodeEgressRule",
     "EpisodeSandboxBackend",
+    "GymHostEgressRule",
+    "GymHostHandle",
+    "GymHostSpec",
+    "GymHostVolumeMount",
+    "NemoGymSandboxedConfig",
+    "SandboxConfig",
     "SanitizedEpisodeSpec",
     "UnsupportedEpisodeOperationError",
     "begin_shutdown",
     "build_broker_app",
     "build_egress_policy",
+    "build_sandbox_egress_policy",
+    "denied_cidrs",
+    "local_resolver_addresses",
     "close_all_episodes",
     "sanitize_create_request",
     "sanitize_exec_request",
