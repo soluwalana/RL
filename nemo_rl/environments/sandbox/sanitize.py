@@ -241,6 +241,7 @@ def sanitize_create_request(
             endpoint_targets=config.egress_allow_targets,
             allow_internet=config.allow_internet,
             public_dns_allow=config.public_dns_allow,
+            resolver_addresses=config.resolver_addresses,
         ),
     )
 

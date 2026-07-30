@@ -97,6 +97,21 @@ DEFAULT_BROKER_HOST = os.environ.get(
 )
 DEFAULT_BROKER_PORT = int(os.environ.get("SANDBOXED_GYM_BROKER_PORT", "51234"))
 
+# Episode images the broker will provision. Deliberately narrow: the broker fails closed, so
+# anything an environment asks for outside these prefixes comes back as a 403 the test can read.
+# ``docker.io/library/`` covers the smoke image; the SWE-bench prefix covers ``mini_swe_agent_2``.
+EPISODE_IMAGE_PREFIXES = tuple(
+    prefix
+    for prefix in os.environ.get(
+        "SANDBOXED_GYM_EPISODE_IMAGE_PREFIXES",
+        "docker.io/library/,docker.io/swebench/",
+    ).split(",")
+    if prefix.strip()
+)
+EPISODE_SMOKE_IMAGE = os.environ.get(
+    "SANDBOXED_GYM_EPISODE_IMAGE", "docker.io/library/python:3.12-slim"
+)
+
 
 def live_opensandbox_enabled() -> bool:
     return os.environ.get("LIVE_OPENSANDBOX") == "1"
@@ -361,6 +376,109 @@ def live_actor_py_executable() -> str:
     return get_actor_python_env(SANDBOXED_GYM_ACTOR_FQN)
 
 
+def broker_service_cluster_ip(target: LiveTarget, broker_host: str) -> str | None:
+    """Look up the ClusterIP behind a ``<name>.<namespace>.svc.cluster.local`` broker host.
+
+    The egress policy denies cluster-private space with the allowed addresses subtracted out, and
+    that subtraction needs an address. Service DNS resolves only inside the cluster, so the
+    workbox has to ask the API server for the ClusterIP and allow it alongside the name. In a
+    deployed job the trusted actor shares the cluster resolver and this is unnecessary.
+    """
+    parts = broker_host.split(".")
+    if len(parts) < 3 or parts[2:5] != ["svc", "cluster", "local"]:
+        return None
+    result = kubectl(
+        target,
+        "get",
+        "svc",
+        parts[0],
+        "-n",
+        parts[1],
+        "-o",
+        "jsonpath={.spec.clusterIP}",
+        check=False,
+    )
+    cluster_ip = result.stdout.strip()
+    return cluster_ip or None
+
+
+CLUSTER_DNS_SERVICES: tuple[tuple[str, str], ...] = (
+    ("kube-system", "kube-dns"),
+    ("kube-system", "coredns"),
+)
+
+
+def cluster_resolver_addresses(target: LiveTarget) -> tuple[str, ...]:
+    """Look up the cluster DNS ClusterIPs a sandbox resolves through.
+
+    The policy defaults to the trusted process's own nameservers, which is right for a deployed
+    actor and wrong from a workbox: the workbox resolves through corporate DNS while the sandbox
+    asks kube-dns, whose ClusterIP is inside the denied cluster-private space. Left denied, the
+    lookup is dropped and nothing resolves -- including the allowed names.
+    """
+    for namespace, name in CLUSTER_DNS_SERVICES:
+        result = kubectl(
+            target,
+            "get",
+            "svc",
+            name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.spec.clusterIP}",
+            check=False,
+        )
+        cluster_ip = result.stdout.strip()
+        if cluster_ip:
+            return (cluster_ip,)
+    return ()
+
+
+def episode_broker_block(
+    domain: str,
+    api_key_value: str,
+    broker_host: str,
+    broker_port: int,
+    resolver_addresses: tuple[str, ...] | None = None,
+) -> dict:
+    """Build the ``env.nemo_gym.episode_broker`` block for live tests.
+
+    The broker runs in the trusted actor's process and is the only side holding the OpenSandbox
+    credential, so its connection settings are configured here rather than reaching the job
+    sandbox. ``host``/``port`` advertise the reverse-tunnel Service DNS instead of the workbox IP,
+    which OpenSandbox pods cannot route to.
+    """
+    block: dict = {
+        "host": broker_host,
+        "port": broker_port,
+        "backend": "opensandbox",
+        "backend_options": {
+            "connection": {
+                "domain": domain,
+                "api_key": api_key_value,
+                "protocol": "http",
+                "use_server_proxy": True,
+                "request_timeout_s": int(READY_TIMEOUT_S),
+            },
+            "create": {
+                "timeout_s": READY_TIMEOUT_S,
+                "request_timeout_s": int(READY_TIMEOUT_S),
+                "skip_health_check": False,
+            },
+        },
+        "approved_image_prefixes": EPISODE_IMAGE_PREFIXES,
+        # SWE-bench images pull for minutes and the harness holds one episode for a whole
+        # trajectory, so the defaults (300s ready, 3600s TTL) would clamp a real run.
+        "max_ready_timeout_s": READY_TIMEOUT_S,
+        "default_ttl_s": 1800.0,
+        "max_ttl_s": 18000.0,
+        "allow_internet": ALLOW_INTERNET,
+    }
+    if resolver_addresses is not None:
+        block["resolver_addresses"] = resolver_addresses
+    return block
+
+
 def sandboxed_env_block(
     domain: str,
     api_key_value: str,
@@ -372,6 +490,8 @@ def sandboxed_env_block(
     policy_port: int | None = None,
     broker_host: str | None = None,
     broker_port: int | None = None,
+    broker_cluster_ip: str | None = None,
+    resolver_addresses: tuple[str, ...] | None = None,
 ) -> dict:
     """Build the ``env.nemo_gym`` sandboxed block used by actor / training jobs."""
     job = job_id or f"gym-host-{uuid.uuid4().hex[:8]}"
@@ -384,16 +504,20 @@ def sandboxed_env_block(
         if with_stub_entrypoint
         else os.environ.get("OPENSANDBOX_LIVE_RUNTIME_IMAGE", NEMO_RL_BASE_IMAGE)
     )
+    egress_allow = [
+        {"host": vllm_host, "port": vllm_port},
+        {"host": tunnel_host, "port": tunnel_port},
+    ]
+    if broker_cluster_ip:
+        egress_allow.append({"host": broker_cluster_ip, "port": tunnel_port})
+    network_policy: dict = {"egress_allow": egress_allow}
+    if resolver_addresses is not None:
+        network_policy["resolver_addresses"] = resolver_addresses
     sandbox: dict = {
         "image": runtime_image,
         "environment_pvc_claim": env_claim,
         "workspace_pvc_claim": work_claim,
-        "network_policy": {
-            "egress_allow": [
-                {"host": vllm_host, "port": vllm_port},
-                {"host": tunnel_host, "port": tunnel_port},
-            ],
-        },
+        "network_policy": network_policy,
         "resources": (
             STUB_SANDBOX_RESOURCES
             if with_stub_entrypoint
@@ -428,11 +552,9 @@ def sandboxed_env_block(
         "job_id": job,
         "environment_path": "/job/environment",
         "sandbox": sandbox,
-        # Advertise the reverse-tunnel Service DNS, not the workbox IP.
-        "episode_broker": {
-            "host": tunnel_host,
-            "port": tunnel_port,
-        },
+        "episode_broker": episode_broker_block(
+            domain, api_key_value, tunnel_host, tunnel_port, resolver_addresses
+        ),
     }
     if with_stub_entrypoint:
         block["config_paths"] = [

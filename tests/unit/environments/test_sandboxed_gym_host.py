@@ -15,8 +15,10 @@
 import ipaddress
 
 import pytest
+from nemo_gym.sandbox.broker import BROKER_TOKEN_ENV, BROKER_URL_ENV
 
-from nemo_rl.environments.sandbox.egress import safe_public_ipv4_cidrs
+from nemo_rl.environments.sandbox import egress
+from nemo_rl.environments.sandbox.egress import _as_network, denied_cidrs
 from nemo_rl.environments.sandbox.host.models import (
     GymHostEgressRule,
     GymHostSpec,
@@ -58,6 +60,8 @@ def test_build_bootstrap_env_sets_required_keys():
     assert env["NMP_BROKER_URL"] == "http://broker:51234"
     assert env["NMP_DATASET_PATH"] == "/job/dataset"
     assert "OPENSANDBOX_API_KEY" not in env
+    assert env[BROKER_URL_ENV] == "http://broker:51234"
+    assert env[BROKER_TOKEN_ENV] == "token"
 
 
 def test_gym_host_spec_enforces_mount_roles():
@@ -79,6 +83,23 @@ def test_egress_rule_accepts_ip_or_fqdn():
         GymHostEgressRule(host="  ", port=8000)
 
 
+def _denies(policy):
+    return {rule.target for rule in policy.rules if rule.action == "deny"}
+
+
+def _allows(policy):
+    return {rule.target for rule in policy.rules if rule.action == "allow"}
+
+
+def _is_denied(address, denied_targets):
+    addr = ipaddress.ip_address(address)
+    return any(
+        addr in ipaddress.ip_network(target)
+        for target in denied_targets
+        if ipaddress.ip_network(target).version == addr.version
+    )
+
+
 def test_host_egress_policy_allow_internet_is_still_default_deny():
     spec = GymHostSpec(
         job_id="job-1",
@@ -90,16 +111,16 @@ def test_host_egress_policy_allow_internet_is_still_default_deny():
     )
     policy = build_host_egress_policy(spec)
     assert policy.default_action == "deny"
-    assert any(
-        r.target == "vllm.svc.cluster.local" and r.action == "allow"
-        for r in policy.rules
+    assert {"vllm.svc.cluster.local", "*.com", "*.org"} <= _allows(policy)
+    # Public space is reached by resolving an allowed name, never by allowing the address range:
+    # an allowed public CIDR would let the sandbox dial any host in it without asking the resolver.
+    assert not any(
+        _as_network(target) is not None and not _as_network(target).is_private
+        for target in _allows(policy)
     )
-    assert any(r.target == "*.com" for r in policy.rules)
-    assert set(safe_public_ipv4_cidrs()).issubset({r.target for r in policy.rules})
-    assert all(r.action == "allow" for r in policy.rules)
 
 
-def test_host_egress_policy_without_internet_has_endpoints_only():
+def test_host_egress_policy_without_internet_has_no_dns_suffixes():
     spec = GymHostSpec(
         job_id="job-1",
         runtime_image="runtime:dev",
@@ -111,8 +132,10 @@ def test_host_egress_policy_without_internet_has_endpoints_only():
     )
     policy = build_host_egress_policy(spec)
     assert policy.default_action == "deny"
-    assert len(policy.rules) == 1
-    assert policy.rules[0].target == "broker.svc.cluster.local"
+    assert _allows(policy) == {"broker.svc.cluster.local"}
+    # Deny rules are not conditional on allow_internet: a sandbox can come to hold a private
+    # address through a name it was allowed for other reasons.
+    assert _is_denied("10.0.0.1", _denies(policy))
 
 
 def test_host_egress_policy_adds_custom_public_dns_suffixes():
@@ -124,8 +147,7 @@ def test_host_egress_policy_adds_custom_public_dns_suffixes():
         allow_internet=True,
         public_dns_allow=("*.io",),
     )
-    targets = {rule.target for rule in build_host_egress_policy(spec).rules}
-    assert {"*.com", "*.org", "*.io"} <= targets
+    assert {"*.com", "*.org", "*.io"} <= _allows(build_host_egress_policy(spec))
 
 
 @pytest.mark.parametrize(
@@ -140,18 +162,82 @@ def test_host_egress_policy_adds_custom_public_dns_suffixes():
         "198.18.0.1",
         "224.0.0.1",
         "240.0.0.1",
+        "fd00::1",
+        "fe80::1",
+        "::1",
     ],
 )
-def test_safe_public_ipv4_cidrs_exclude_non_public_space(address):
-    addr = ipaddress.ip_address(address)
-    networks = [ipaddress.ip_network(cidr) for cidr in safe_public_ipv4_cidrs()]
-    assert not any(addr in network for network in networks)
+def test_denied_cidrs_cover_non_public_space(address):
+    assert _is_denied(address, denied_cidrs(resolver_addresses=()))
 
 
-def test_safe_public_ipv4_cidrs_include_public_space_without_allow_all():
-    networks = [ipaddress.ip_network(cidr) for cidr in safe_public_ipv4_cidrs()]
-    assert any(ipaddress.ip_address("8.8.8.8") in network for network in networks)
-    assert ipaddress.ip_network("0.0.0.0/0") not in networks
+def test_denied_cidrs_leave_public_space_reachable():
+    """A deny that swallowed public space would make the DNS whitelist useless."""
+    denied = denied_cidrs(resolver_addresses=())
+    assert not _is_denied("8.8.8.8", denied)
+    assert not _is_denied("2606:4700::1111", denied)
+    assert "0.0.0.0/0" not in denied
+
+
+def test_denied_cidrs_carve_out_an_allowed_private_address():
+    """The whole point: an allowed host inside a denied range must survive the deny.
+
+    OpenSandbox evaluates ``@deny`` before both the DNS-learned set and ``@allow``, so a denied
+    ``10.0.0.0/8`` would beat an allowed ``10.0.0.51`` rather than lose to it.
+    """
+    denied = denied_cidrs(("10.0.0.51",), resolver_addresses=())
+    assert not _is_denied("10.0.0.51", denied)
+    assert _is_denied("10.0.0.50", denied)
+    assert _is_denied("10.0.0.52", denied)
+    assert _is_denied("10.255.255.255", denied)
+
+
+def test_denied_cidrs_split_repeatedly_for_several_allowed_addresses():
+    """Each further allowed address splits whichever fragment now contains it."""
+    allowed = ("10.0.0.51", "10.0.0.83", "10.0.0.193")
+    denied = denied_cidrs(allowed, resolver_addresses=())
+    for address in allowed:
+        assert not _is_denied(address, denied)
+    for address in ("10.0.0.50", "10.0.0.84", "10.0.0.192", "10.0.0.194", "10.1.0.1"):
+        assert _is_denied(address, denied)
+    # Fragments must stay disjoint; nftables interval sets reject overlapping elements.
+    networks = sorted(ipaddress.ip_network(target) for target in denied if ":" not in target)
+    for earlier, later in zip(networks, networks[1:]):
+        assert earlier.broadcast_address < later.network_address
+
+
+def test_denied_cidrs_carve_out_a_resolvable_hostname():
+    """Hostnames are resolved so a private endpoint named by DNS is not denied by address."""
+    denied = denied_cidrs(("localhost",), resolver_addresses=())
+    assert not _is_denied("127.0.0.1", denied)
+    assert _is_denied("127.0.0.2", denied)
+
+
+def test_denied_cidrs_ignore_wildcard_dns_targets():
+    assert denied_cidrs(("*.com",), resolver_addresses=()) == denied_cidrs(
+        resolver_addresses=()
+    )
+
+
+def test_denied_cidrs_carve_out_the_resolver():
+    """A denied resolver drops every lookup, so nothing resolves and no allow rule can fire."""
+    denied = denied_cidrs(resolver_addresses=("10.96.5.5",))
+    assert not _is_denied("10.96.5.5", denied)
+    assert _is_denied("10.96.5.6", denied)
+
+
+def test_denied_cidrs_default_the_resolver_to_the_local_nameservers(tmp_path, monkeypatch):
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("search svc.cluster.local\nnameserver 10.96.5.5  # cluster\n")
+    monkeypatch.setattr(egress, "RESOLV_CONF_PATH", str(resolv_conf))
+
+    assert egress.local_resolver_addresses() == ("10.96.5.5",)
+    assert not _is_denied("10.96.5.5", denied_cidrs())
+
+
+def test_local_resolver_addresses_tolerate_a_missing_resolv_conf(tmp_path, monkeypatch):
+    monkeypatch.setattr(egress, "RESOLV_CONF_PATH", str(tmp_path / "absent"))
+    assert egress.local_resolver_addresses() == ()
 
 
 def test_sandboxed_config_requires_sandbox_block():

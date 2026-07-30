@@ -225,6 +225,7 @@ def _gym_host_spec_from_config(
         runtime_http_port=sandbox.runtime_http_port,
         allow_internet=sandbox.allow_internet,
         public_dns_allow=sandbox.network_policy.public_dns_allow,
+        resolver_addresses=sandbox.network_policy.resolver_addresses,
         entrypoint=tuple(sandbox.entrypoint) if sandbox.entrypoint else None,
     )
 

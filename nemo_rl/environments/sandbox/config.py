@@ -82,6 +82,8 @@ class EpisodeBrokerConfig(BaseModel):
     allow_internet: bool = False
     egress_allow_targets: tuple[str, ...] = ()
     public_dns_allow: tuple[str, ...] | None = None
+    # Set when the episode sandbox resolves through a different nameserver than the broker.
+    resolver_addresses: tuple[str, ...] | None = None
 
     # How hard to check that the egress policy the backend reports matches the one requested.
     #

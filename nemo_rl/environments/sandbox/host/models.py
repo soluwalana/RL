@@ -22,6 +22,7 @@ Defines the create/spec and config shapes used by ``SandboxedGymHostProvider`` a
 from dataclasses import dataclass, field
 from typing import Any, Generic, Mapping, TypeVar
 
+from nemo_gym.sandbox.broker import BROKER_TOKEN_ENV, BROKER_URL_ENV
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nemo_rl.environments.sandbox.config import K8S_LABEL_VALUE_RE
@@ -113,6 +114,8 @@ class GymHostSpec(BaseModel):
     # public IPv4 and DNS-suffix whitelist.
     allow_internet: bool = False
     public_dns_allow: tuple[str, ...] | None = None
+    # Nameservers to keep out of the deny ranges. Defaults to the trusted process's own.
+    resolver_addresses: tuple[str, ...] | None = None
     entrypoint: tuple[str, ...] | None = None
 
     @field_validator("job_id")
@@ -164,6 +167,8 @@ class SandboxNetworkPolicy(BaseModel):
     egress_allow: list[GymHostEgressRule] = Field(default_factory=list)
     # Additional suffixes consulted only when ``allow_internet`` is true.
     public_dns_allow: tuple[str, ...] | None = None
+    # Set when the sandbox resolves through a different nameserver than the trusted process.
+    resolver_addresses: tuple[str, ...] | None = None
 
 
 class SandboxConfig(BaseModel):
@@ -241,13 +246,19 @@ def build_bootstrap_env(
     dataset_path: str | None = None,
     extra: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Build the bootstrap environment injected into the job sandbox."""
+    """Build the bootstrap environment injected into the job sandbox.
+
+    Publishes the broker under both ``NMP_BROKER_*`` and Gym's ``BROKER_*_ENV`` names so the
+    runtime and ``Sandbox`` agree on the endpoint.
+    """
     env: dict[str, str] = {
         "NMP_JOB_ID": job_id,
         "NMP_ENVIRONMENT_PATH": environment_path,
         "NMP_WORK_PATH": work_path,
         "NMP_BROKER_URL": broker_url,
         "NMP_BROKER_TOKEN": broker_token,
+        BROKER_URL_ENV: broker_url,
+        BROKER_TOKEN_ENV: broker_token,
         "NMP_MAX_REQUEST_BYTES": str(max_request_bytes),
         "NMP_MAX_RESPONSE_BYTES": str(max_response_bytes),
     }

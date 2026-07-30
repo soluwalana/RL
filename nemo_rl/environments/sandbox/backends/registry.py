@@ -51,6 +51,7 @@ def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
                 endpoint_targets=config.egress_allow_targets,
                 allow_internet=config.allow_internet,
                 public_dns_allow=config.public_dns_allow,
+                resolver_addresses=config.resolver_addresses,
             ),
             verification=config.egress_verification,
             **config.backend_options,
