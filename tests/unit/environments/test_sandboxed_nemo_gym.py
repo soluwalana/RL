@@ -45,7 +45,7 @@ from sandboxed_gym_live_common import (
     DEFAULT_POLICY_BASE_URL,
     DEFAULT_POLICY_MODEL_NAME,
     READY_TIMEOUT_S,
-    broker_service_cluster_ip,
+    broker_service_addresses,
     build_live_target,
     cluster_resolver_addresses,
     create_ephemeral_pvcs,
@@ -116,7 +116,7 @@ def sandboxed_gym_actor(live_target, port_forward, ephemeral_pvcs):
         env_claim,
         work_claim,
         with_stub_entrypoint=use_stub,
-        broker_cluster_ip=broker_service_cluster_ip(live_target, DEFAULT_BROKER_HOST),
+        broker_addresses=broker_service_addresses(live_target, DEFAULT_BROKER_HOST),
         resolver_addresses=cluster_resolver_addresses(live_target),
     )
     if use_stub:
