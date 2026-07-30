@@ -41,10 +41,13 @@ from transformers import AutoTokenizer
 
 from nemo_rl.environments.sandbox.nemo_gym_actor import SandboxedGymActor
 from sandboxed_gym_live_common import (
+    DEFAULT_BROKER_HOST,
     DEFAULT_POLICY_BASE_URL,
     DEFAULT_POLICY_MODEL_NAME,
     READY_TIMEOUT_S,
+    broker_service_cluster_ip,
     build_live_target,
+    cluster_resolver_addresses,
     create_ephemeral_pvcs,
     live_actor_py_executable,
     live_opensandbox_enabled,
@@ -103,12 +106,18 @@ def sandboxed_sanity_inputs():
 
 
 @pytest.fixture
-def sandboxed_gym_actor(port_forward, ephemeral_pvcs):
+def sandboxed_gym_actor(live_target, port_forward, ephemeral_pvcs):
     domain, api_key = port_forward
     env_claim, work_claim = ephemeral_pvcs
     use_stub = os.environ.get("SANDBOXED_GYM_LIVE_USE_STUB", "0") == "1"
     sandboxed = sandboxed_env_block(
-        domain, api_key, env_claim, work_claim, with_stub_entrypoint=use_stub
+        domain,
+        api_key,
+        env_claim,
+        work_claim,
+        with_stub_entrypoint=use_stub,
+        broker_cluster_ip=broker_service_cluster_ip(live_target, DEFAULT_BROKER_HOST),
+        resolver_addresses=cluster_resolver_addresses(live_target),
     )
     if use_stub:
         initial_global_config_dict = {

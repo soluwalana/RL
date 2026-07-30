@@ -32,7 +32,8 @@ from nemo_rl.environments.sandbox.egress import (
     EpisodeEgressRule,
     build_egress_policy,
     build_sandbox_egress_policy,
-    safe_public_ipv4_cidrs,
+    denied_cidrs,
+    local_resolver_addresses,
 )
 from nemo_rl.environments.sandbox.errors import BrokerRequestError
 from nemo_rl.environments.sandbox.host.models import (
@@ -74,7 +75,8 @@ __all__ = [
     "build_broker_app",
     "build_egress_policy",
     "build_sandbox_egress_policy",
-    "safe_public_ipv4_cidrs",
+    "denied_cidrs",
+    "local_resolver_addresses",
     "close_all_episodes",
     "sanitize_create_request",
     "sanitize_exec_request",

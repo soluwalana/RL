@@ -52,6 +52,7 @@ def build_host_egress_policy(spec: GymHostSpec) -> EpisodeEgressPolicy:
         endpoint_targets=allow_targets,
         allow_internet=spec.allow_internet,
         public_dns_allow=spec.public_dns_allow,
+        resolver_addresses=spec.resolver_addresses,
     )
 
 

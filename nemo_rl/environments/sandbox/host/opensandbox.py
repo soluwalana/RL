@@ -229,11 +229,14 @@ class OpenSandboxGymHostProvider:
         return json.loads(payload.decode("utf-8"))
 
     async def exec_host(
-        self, handle: "GymHostHandle[OpenSandboxProvider]", command: str
+        self,
+        handle: "GymHostHandle[OpenSandboxProvider]",
+        command: str,
+        timeout_s: float | None = None,
     ) -> "SandboxExecResult":
         """Run a diagnostic command through the host's provider."""
         provider, resource_handle = self._provider_state(handle)
-        return await provider.exec(resource_handle, command)
+        return await provider.exec(resource_handle, command, timeout_s=timeout_s)
 
     def _provider_state(
         self, handle: "GymHostHandle[OpenSandboxProvider]"
