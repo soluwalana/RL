@@ -106,7 +106,10 @@ def test_rollouts_run_rejects_oversize_request(ready_server):
         f"{ready_server}/rollouts/run",
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/json", "Content-Length": str(len(payload))},
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": str(len(payload)),
+        },
     )
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(req, timeout=5)

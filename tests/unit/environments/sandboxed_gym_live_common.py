@@ -24,6 +24,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -65,10 +66,10 @@ STORAGE_ACCESS_MODE = os.environ.get(
 )
 
 # External vLLM / IGW used as Gym ``policy_base_url`` for live sandboxed tests.
-# Deployed on nmp-temp1 (same cluster as OpenSandbox); FQDN must be allowlisted
-# because cluster CIDRs are denied by the host egress profile.
+#
+# Internal requests made against external ingresses are short circuted but the port is maintained, so we use http:// here and port 443
 NMP_TEMP1_BASE_URL = os.environ.get(
-    "NMP_TEMP1_BASE_URL", "https://nmp-temp1.dev.aire.nvidia.com"
+    "NMP_TEMP1_BASE_URL", "http://nmp-temp1.dev.aire.nvidia.com:443"
 ).rstrip("/")
 DEFAULT_POLICY_MODEL_NAME = os.environ.get(
     "SANDBOXED_GYM_POLICY_MODEL_NAME", "default/qwen3-5-2b"
@@ -77,11 +78,15 @@ DEFAULT_POLICY_BASE_URL = os.environ.get(
     "SANDBOXED_GYM_POLICY_BASE_URL",
     f"{NMP_TEMP1_BASE_URL}/apis/inference-gateway/v2/workspaces/default/openai/-/v1",
 )
+_POLICY_URL = urlparse(DEFAULT_POLICY_BASE_URL)
 DEFAULT_POLICY_HOST = os.environ.get(
-    "SANDBOXED_GYM_POLICY_HOST",
-    NMP_TEMP1_BASE_URL.split("://", 1)[-1].split("/", 1)[0],
+    "SANDBOXED_GYM_POLICY_HOST", _POLICY_URL.hostname or ""
 )
-DEFAULT_POLICY_PORT = int(os.environ.get("SANDBOXED_GYM_POLICY_PORT", "443"))
+DEFAULT_POLICY_PORT = int(
+    os.environ.get("SANDBOXED_GYM_POLICY_PORT", "")
+    or _POLICY_URL.port
+    or (443 if _POLICY_URL.scheme == "https" else 80)
+)
 
 # Episode broker reachability from OpenSandbox pods: workbox IP is not
 # cluster-routable. Live tests advertise a reverse-tunnel Service in
@@ -324,6 +329,7 @@ openai_model:
       model: ${policy_model_name}
       return_token_id_information: true
       uses_reasoning_parser: true
+global_aiohttp_client_request_debug: true
 """
     loaded = safe_load(yaml_str)
     assert isinstance(loaded, dict)
