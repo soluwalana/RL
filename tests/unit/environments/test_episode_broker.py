@@ -306,17 +306,13 @@ def test_job_id_is_stamped_into_backend_metadata(client, backend):
     assert spec.job_id == "job-1"
 
 
-def test_mounts_stay_empty_and_egress_denies_cluster_ranges(client, backend):
+def test_mounts_stay_empty_and_egress_is_strict_by_default(client, backend):
     create_episode(client)
 
     spec = backend.specs[0]
     assert spec.mounts == ()
-    # Allow-by-default: the threat is reaching another tenant, not reaching the internet, and
-    # graders legitimately install packages mid-episode.
-    assert spec.egress.default_action == "allow"
-    denied = {rule.target for rule in spec.egress.rules if rule.action == "deny"}
-    # The ranges most likely to be forgotten, and most costly to forget.
-    assert {"10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "::ffff:0:0/96"} <= denied
+    assert spec.egress.default_action == "deny"
+    assert spec.egress.rules == ()
 
 
 # --------------------------------------------------------------------------------------------
@@ -648,33 +644,24 @@ def test_memory_backend_requires_an_explicit_insecure_opt_in():
     assert backend.name == "memory"
 
 
-def test_unrestricted_egress_requires_an_explicit_opt_in():
-    with pytest.raises(ValueError, match="allow_unrestricted_episode_egress"):
-        EpisodeBrokerConfig(
-            job_id="job-1",
-            egress_default_action="allow",
-            egress_deny_targets=(),
-        )
-
+def test_episode_egress_interface_is_allow_only():
     config = EpisodeBrokerConfig(
         job_id="job-1",
-        egress_default_action="allow",
-        egress_deny_targets=(),
-        allow_unrestricted_episode_egress=True,
+        allow_internet=True,
+        egress_allow_targets=("broker.svc.cluster.local",),
+        public_dns_allow=("*.com",),
     )
-    assert config.egress_deny_targets == ()
+    assert config.allow_internet is True
+    assert config.egress_allow_targets == ("broker.svc.cluster.local",)
+    assert config.public_dns_allow == ("*.com",)
 
-
-def test_deny_by_default_needs_no_opt_in():
-    # Nothing reachable unless allowed is always a safe configuration to express.
-    assert (
-        EpisodeBrokerConfig(
-            job_id="job-1",
-            egress_default_action="deny",
-            egress_deny_targets=(),
-        ).egress_default_action
-        == "deny"
-    )
+    for removed in (
+        "egress_default_action",
+        "egress_deny_targets",
+        "allow_unrestricted_episode_egress",
+    ):
+        with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+            EpisodeBrokerConfig(job_id="job-1", **{removed: ()})
 
 
 # --------------------------------------------------------------------------------------------

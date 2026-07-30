@@ -38,7 +38,6 @@ from nemo_rl.environments.sandbox.backends.base import (
     UnsupportedEpisodeOperationError,
 )
 from nemo_rl.environments.sandbox.egress import (
-    DEFAULT_CLUSTER_DENY_TARGETS,
     EpisodeEgressPolicy,
     EpisodeEgressRule,
     build_egress_policy,
@@ -141,7 +140,9 @@ def make_backend(**overrides):
         OpenSandboxEpisodeBackend,
     )
 
-    settings: dict[str, Any] = {"egress": build_egress_policy(default_action="allow")}
+    settings: dict[str, Any] = {
+        "egress": build_egress_policy(allow_targets=("pypi.org",))
+    }
     settings.update(overrides)
     return OpenSandboxEpisodeBackend(**settings)
 
@@ -152,7 +153,7 @@ def make_spec(**overrides) -> SanitizedEpisodeSpec:
         "image": "registry.example.com/swe/grader:1.0",
         "ttl_s": 300.0,
         "metadata": {"nemo-rl-job-id": "job-1"},
-        "egress": build_egress_policy(default_action="allow"),
+        "egress": build_egress_policy(allow_targets=("pypi.org",)),
     }
     settings.update(overrides)
     return SanitizedEpisodeSpec(**settings)
@@ -167,9 +168,8 @@ def test_egress_policy_reaches_the_provider_at_construction():
     make_backend()
 
     policy = FakeProvider.instances[0].create_config["network_policy"]
-    assert policy["defaultAction"] == "allow"
-    denied = {rule["target"] for rule in policy["egress"] if rule["action"] == "deny"}
-    assert set(DEFAULT_CLUSTER_DENY_TARGETS) == denied
+    assert policy["defaultAction"] == "deny"
+    assert policy["egress"] == [{"action": "allow", "target": "pypi.org"}]
 
 
 def test_broker_owned_policy_overrides_a_configured_one():
@@ -189,8 +189,8 @@ def test_broker_owned_policy_overrides_a_configured_one():
 @pytest.mark.asyncio
 async def test_strict_verification_fails_and_reaps_when_rules_are_missing():
     backend = make_backend(verification="strict")
-    # Server reports a policy that silently dropped the cluster denials.
-    FakeProvider.instances[0].applied_policy = {"defaultAction": "allow", "egress": []}
+    # Server reports a policy that silently dropped the explicit allow.
+    FakeProvider.instances[0].applied_policy = {"defaultAction": "deny", "egress": []}
 
     with pytest.raises(EpisodeBackendError, match="did not apply"):
         await backend.create(make_spec())
@@ -204,7 +204,7 @@ async def test_default_verification_warns_on_missing_rules_rather_than_failing(c
     # The sidecar returns a merged, re-serialized policy, so a textual rule difference is more
     # likely reformatting than a real gap. Failing every episode closed over that would be worse.
     backend = make_backend()
-    FakeProvider.instances[0].applied_policy = {"defaultAction": "allow", "egress": []}
+    FakeProvider.instances[0].applied_policy = {"defaultAction": "deny", "egress": []}
 
     with caplog.at_level("WARNING"):
         assert await backend.create(make_spec()) == "sandbox-1"
@@ -215,20 +215,14 @@ async def test_default_verification_warns_on_missing_rules_rather_than_failing(c
 
 @pytest.mark.asyncio
 async def test_reformatted_targets_do_not_count_as_missing():
-    # Go renders the IPv4-mapped prefix we send as ::ffff:0:0/96 in its mixed form, and may
-    # differ in case for other IPv6 literals. Neither is a real gap.
-    backend = make_backend(verification="strict")
+    # Equivalent IPv6 CIDR spellings are not a real gap.
+    backend = make_backend(
+        verification="strict",
+        egress=build_egress_policy(allow_targets=("2001:DB8::/32",)),
+    )
     FakeProvider.instances[0].applied_policy = {
-        "defaultAction": "allow",
-        "egress": [
-            {
-                "action": "deny",
-                "target": "::ffff:0.0.0.0/96"
-                if target == "::ffff:0:0/96"
-                else target.upper(),
-            }
-            for target in DEFAULT_CLUSTER_DENY_TARGETS
-        ],
+        "defaultAction": "deny",
+        "egress": [{"action": "allow", "target": "2001:db8:0:0::/32"}],
     }
 
     assert await backend.create(make_spec()) == "sandbox-1"
@@ -242,11 +236,8 @@ async def test_create_fails_when_default_action_was_flipped():
     backend = make_backend()
     provider = FakeProvider.instances[0]
     provider.applied_policy = {
-        "defaultAction": "deny",
-        "egress": [
-            {"action": "deny", "target": target}
-            for target in DEFAULT_CLUSTER_DENY_TARGETS
-        ],
+        "defaultAction": "allow",
+        "egress": [{"action": "allow", "target": "pypi.org"}],
     }
 
     with pytest.raises(EpisodeBackendError):
@@ -277,14 +268,14 @@ def test_policy_rendering_uses_the_sidecar_field_names():
 
     rendered = to_opensandbox_policy(
         EpisodeEgressPolicy(
-            default_action="allow",
-            rules=(EpisodeEgressRule(target="10.0.0.0/8", action="deny"),),
+            default_action="deny",
+            rules=(EpisodeEgressRule(target="broker.svc", action="allow"),),
         )
     )
 
     assert rendered == {
-        "defaultAction": "allow",
-        "egress": [{"action": "deny", "target": "10.0.0.0/8"}],
+        "defaultAction": "deny",
+        "egress": [{"action": "allow", "target": "broker.svc"}],
     }
 
 
@@ -404,15 +395,16 @@ def test_registry_builds_the_backend_with_the_configured_egress_profile():
 
     backend = build_backend(
         EpisodeBrokerConfig(
-            job_id="job-1", backend="opensandbox", egress_allow_targets=("pypi.org",)
+            job_id="job-1",
+            backend="opensandbox",
+            allow_internet=False,
+            egress_allow_targets=("pypi.org",),
         )
     )
 
     assert backend.name == "opensandbox"
     policy = FakeProvider.instances[0].create_config["network_policy"]
-    assert policy["defaultAction"] == "allow"
-    # An explicit allow precedes the broad range denials it would otherwise fall inside.
-    assert policy["egress"][0] == {"action": "allow", "target": "pypi.org"}
-    assert {
-        rule["target"] for rule in policy["egress"] if rule["action"] == "deny"
-    } == set(DEFAULT_CLUSTER_DENY_TARGETS)
+    assert policy == {
+        "defaultAction": "deny",
+        "egress": [{"action": "allow", "target": "pypi.org"}],
+    }

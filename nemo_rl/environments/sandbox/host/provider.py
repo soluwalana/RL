@@ -14,47 +14,50 @@
 
 """Job-host provider protocol and registry."""
 
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from nemo_rl.environments.sandbox.egress import (
     EpisodeEgressPolicy,
-    build_egress_policy,
+    build_sandbox_egress_policy,
 )
 from nemo_rl.environments.sandbox.host.models import GymHostHandle, GymHostSpec
 
 
-class SandboxedGymHostProvider(Protocol):
+TProvider = TypeVar("TProvider")
+
+
+class SandboxedGymHostProvider(Protocol[TProvider]):
     """Provisions and tears down the job-level Gym host sandbox."""
 
     name: str
+    # Concrete provider implementation stored on ``GymHostHandle.provider``.
+    provider_class: type[TProvider]
 
-    async def create_host(self, spec: GymHostSpec) -> GymHostHandle:
+    async def create_host(self, spec: GymHostSpec) -> GymHostHandle[TProvider]:
         """Create the host and return actor-reachable health/rollout URLs."""
 
-    async def wait_ready(self, handle: GymHostHandle, timeout_s: float) -> None:
+    async def wait_ready(
+        self, handle: GymHostHandle[TProvider], timeout_s: float
+    ) -> None:
         """Block until ``GET health_url`` reports ready, or raise on timeout."""
 
-    async def destroy_host(self, handle: GymHostHandle) -> None:
+    async def destroy_host(self, handle: GymHostHandle[TProvider]) -> None:
         """Terminate the host. Best-effort; must not raise after a successful destroy."""
 
 
 def build_host_egress_policy(spec: GymHostSpec) -> EpisodeEgressPolicy:
-    """Build the shared egress profile for a job host from ``GymHostSpec``."""
+    """Build an allow-only, deny-by-default job-host policy."""
     allow_targets = tuple(rule.host for rule in spec.egress_allow)
-    if spec.deny_internet:
-        return build_egress_policy(
-            default_action="deny",
-            allow_targets=allow_targets,
-            deny_targets=(),
-        )
-    return build_egress_policy(
-        default_action="allow",
-        allow_targets=allow_targets,
-        deny_targets=spec.egress_deny_targets,
+    return build_sandbox_egress_policy(
+        endpoint_targets=allow_targets,
+        allow_internet=spec.allow_internet,
+        public_dns_allow=spec.public_dns_allow,
     )
 
 
-def get_host_provider(name: str, options: dict | None = None) -> SandboxedGymHostProvider:
+def get_host_provider(
+    name: str, options: dict | None = None
+) -> SandboxedGymHostProvider:
     """Construct a registered job-host provider by name."""
     options = options or {}
     if name == "opensandbox":

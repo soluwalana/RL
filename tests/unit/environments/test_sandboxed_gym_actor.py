@@ -83,7 +83,7 @@ class _FakeHostProvider:
             host_id="host-1",
             health_url="http://host.svc/health",
             rollout_url="http://host.svc/rollouts/run",
-            opaque=None,
+            provider=None,
         )
 
     async def wait_ready(self, handle, timeout_s):
