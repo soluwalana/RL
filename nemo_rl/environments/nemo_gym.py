@@ -614,10 +614,15 @@ def spinup_nemo_gym_actor(
     base_urls: list[Optional[str]],
     model_name: str,
     enable_router_replay: bool,
+    routed_experts_dtype: Optional[str] = None,
+    use_fastokens: bool = False,
 ) -> Any:
     """Spin up the NeMo-Gym actor against the given generation server URLs.
 
-    When ``env_configs["nemo_gym"]["num_gpu_nodes"] > 0``, the actor is
+    When ``env_configs["nemo_gym"]["sandboxed"]`` is true, provisions
+    ``SandboxedGymActor`` instead of the colocated ``NemoGym`` actor.
+
+    When ``env_configs["nemo_gym"]["num_gpu_nodes"] > 0``, the colocated actor is
     scheduled with soft NodeAffinity to the current Ray node so its colocated
     GPU resources land where the caller expects.
 
@@ -630,9 +635,12 @@ def spinup_nemo_gym_actor(
         model_name: Served model name the Gym rollouts should target.
         enable_router_replay: Sets ``require_routed_experts`` on the
             ``NemoGymConfig``.
+        routed_experts_dtype: Dtype name for routed-expert replay tensors; the
+            actor default is used when omitted.
+        use_fastokens: Enables the fastokens tokenizer patch in the actor.
 
     Returns:
-        The spun-up ``NemoGym`` Ray actor handle (``_spinup`` already awaited).
+        The spun-up Gym Ray actor handle (``_spinup`` already awaited).
     """
     nemo_gym_dict = dict(env_configs["nemo_gym"])
 
@@ -640,6 +648,65 @@ def spinup_nemo_gym_actor(
     # (where the detector reads them), not part of Gym's global config.
     invalid_tool_call_patterns = nemo_gym_dict.pop("invalid_tool_call_patterns", None)
     thinking_tags = nemo_gym_dict.pop("thinking_tags", None)
+
+    # Platform-injected sandbox keys (nemo-platform compiler / environment).
+    # Pop them so the remaining mapping stays a compatible Gym global config
+    # whether the job runs colocated or sandboxed.
+    sandboxed_flag = bool(nemo_gym_dict.pop("sandboxed", False))
+    host_provider = nemo_gym_dict.pop("host_provider", "opensandbox")
+    environment_path = nemo_gym_dict.pop("environment_path", None)
+    sandbox_block = nemo_gym_dict.pop("sandbox", None)
+    job_id = nemo_gym_dict.pop("job_id", None)
+    episode_broker = nemo_gym_dict.pop("episode_broker", None) or {}
+    num_gpu_nodes = nemo_gym_dict.pop("num_gpu_nodes", 0)
+
+    if sandboxed_flag:
+        from nemo_rl.environments.sandbox.nemo_gym_actor import (
+            SANDBOXED_GYM_ACTOR_FQN,
+            SandboxedGymActor,
+            SandboxedGymActorConfig,
+        )
+        from nemo_rl.environments.sandbox.host.models import NemoGymSandboxedConfig
+
+        sandboxed_cfg = NemoGymSandboxedConfig.model_validate(
+            {
+                "sandboxed": True,
+                "host_provider": host_provider,
+                "environment_path": environment_path,
+                "sandbox": sandbox_block,
+                "job_id": job_id,
+                "episode_broker": episode_broker,
+            }
+        )
+        # User Gym config (remaining nemo_gym_dict) is forwarded unchanged.
+        actor_cfg: SandboxedGymActorConfig = {
+            "model_name": model_name,
+            "base_urls": base_urls,
+            "invalid_tool_call_patterns": invalid_tool_call_patterns,
+            "thinking_tags": thinking_tags,
+            "require_routed_experts": enable_router_replay,
+            "initial_global_config_dict": nemo_gym_dict,
+            "sandboxed": sandboxed_cfg.model_dump(mode="python"),
+            "use_fastokens": use_fastokens,
+        }
+        if routed_experts_dtype is not None:
+            actor_cfg["routed_experts_dtype"] = routed_experts_dtype
+        py_exec = get_actor_python_env(SANDBOXED_GYM_ACTOR_FQN)
+        if py_exec.startswith("uv"):
+            py_exec = create_local_venv_on_each_node(py_exec, SANDBOXED_GYM_ACTOR_FQN)
+        opts: dict[str, Any] = {
+            "runtime_env": {
+                "py_executable": py_exec,
+                "env_vars": {
+                    **os.environ,
+                    "VIRTUAL_ENV": py_exec,
+                    "UV_PROJECT_ENVIRONMENT": py_exec,
+                },
+            }
+        }
+        actor = SandboxedGymActor.options(**opts).remote(actor_cfg)
+        ray.get(actor._spinup.remote())
+        return actor
 
     # Pass prebuilt cache + venv dirs through the global config so the gym reuses
     # image-baked venvs instead of rebuilding them.
@@ -666,7 +733,7 @@ def spinup_nemo_gym_actor(
         )
 
     nemo_gym_opts: dict[str, Any] = {}
-    if nemo_gym_dict.get("num_gpu_nodes", 0):
+    if num_gpu_nodes:
         nemo_gym_opts["scheduling_strategy"] = NodeAffinitySchedulingStrategy(
             node_id=ray.get_runtime_context().get_node_id(),
             soft=True,

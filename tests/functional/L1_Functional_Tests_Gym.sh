@@ -37,6 +37,14 @@ run_test() {
 run_test fast uv run --no-sync bash ./tests/functional/grpo_async_gym.sh
 run_test fast uv run --no-sync bash ./tests/functional/distillation_nemo_gym.sh
 
+# Sandboxed Gym counterparts (skipped unless OpenSandbox placement env is set).
+if [[ "${LIVE_OPENSANDBOX:-}" == "1" ]]; then
+  run_test uv run --no-sync bash ./tests/functional/grpo_async_gym_sandboxed.sh
+  run_test uv run --no-sync bash ./tests/functional/distillation_nemo_gym_sandboxed.sh
+else
+  echo "LIVE_OPENSANDBOX!=1: Skipping sandboxed Gym functionals"
+fi
+
 cd ${PROJECT_ROOT}/tests
 if compgen -G ".coverage*" > /dev/null; then
     coverage combine .coverage*
