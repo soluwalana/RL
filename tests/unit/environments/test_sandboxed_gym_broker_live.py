@@ -63,7 +63,7 @@ from sandboxed_gym_live_common import (
     READY_TIMEOUT_S,
     RUNTIME_IMAGE,
     STUB_SANDBOX_RESOURCES,
-    broker_service_cluster_ip,
+    broker_service_addresses,
     build_live_target,
     cluster_resolver_addresses,
     create_ephemeral_pvcs,
@@ -197,21 +197,21 @@ def _host_spec(
     env_claim: str,
     work_claim: str,
     endpoint,
-    broker_cluster_ip: str | None,
+    broker_addresses: tuple[str, ...],
     resolver_addresses: tuple[str, ...],
 ) -> GymHostSpec:
     """Job-host spec whose only permitted destination is the broker.
 
     ``allow_internet`` stays off and no policy endpoint is allowed, so anything the probe reaches
-    it reached through the rule under test. The ClusterIP is allowed alongside the Service name
-    because the deny ranges cover cluster-private space and only an address can be subtracted
-    from them; the workbox cannot resolve Service DNS to supply it automatically.
+    it reached through the rule under test. The Service's addresses are allowed alongside its name
+    because the deny ranges cover cluster-private space and only an address can be subtracted from
+    them; the workbox cannot resolve Service DNS to supply them automatically.
     """
     egress_allow = [GymHostEgressRule(host=DEFAULT_BROKER_HOST, port=DEFAULT_BROKER_PORT)]
-    if broker_cluster_ip:
-        egress_allow.append(
-            GymHostEgressRule(host=broker_cluster_ip, port=DEFAULT_BROKER_PORT)
-        )
+    egress_allow.extend(
+        GymHostEgressRule(host=address, port=DEFAULT_BROKER_PORT)
+        for address in broker_addresses
+    )
     return GymHostSpec(
         job_id=job_id,
         runtime_image=RUNTIME_IMAGE,
@@ -273,13 +273,12 @@ async def test_live_broker_provisions_episodes_for_the_job_sandbox(
     )
     try:
         assert endpoint.host == DEFAULT_BROKER_HOST
-        cluster_ip = broker_service_cluster_ip(live_target, DEFAULT_BROKER_HOST)
         spec = _host_spec(
             job_id,
             env_claim,
             work_claim,
             endpoint,
-            cluster_ip,
+            broker_service_addresses(live_target, DEFAULT_BROKER_HOST),
             cluster_resolver_addresses(live_target),
         )
         # The OpenSandbox credential the broker holds must not have followed the endpoint into the

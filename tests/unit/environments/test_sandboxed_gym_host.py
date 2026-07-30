@@ -129,6 +129,7 @@ def test_host_egress_policy_without_internet_has_no_dns_suffixes():
         egress_allow=(GymHostEgressRule(host="broker.svc.cluster.local", port=51234),),
         allow_internet=False,
         public_dns_allow=("*.io",),
+        resolver_addresses=(),
     )
     policy = build_host_egress_policy(spec)
     assert policy.default_action == "deny"
@@ -155,7 +156,6 @@ def test_host_egress_policy_adds_custom_public_dns_suffixes():
     [
         "10.0.0.1",
         "100.64.0.1",
-        "127.0.0.1",
         "169.254.169.254",
         "172.16.0.1",
         "192.168.0.1",
@@ -164,11 +164,20 @@ def test_host_egress_policy_adds_custom_public_dns_suffixes():
         "240.0.0.1",
         "fd00::1",
         "fe80::1",
-        "::1",
     ],
 )
 def test_denied_cidrs_cover_non_public_space(address):
     assert _is_denied(address, denied_cidrs(resolver_addresses=()))
+
+
+@pytest.mark.parametrize("address", ["127.0.0.1", "127.0.0.53", "::1"])
+def test_denied_cidrs_leave_loopback_alone(address):
+    """Loopback is the sandbox's own namespace, and the egress sidecar's DNS proxy lives there.
+
+    All port-53 traffic is redirected to that proxy on ``127.0.0.1``, and deny beats allow, so a
+    denied loopback drops every lookup before it can reach the resolver.
+    """
+    assert not _is_denied(address, denied_cidrs(resolver_addresses=()))
 
 
 def test_denied_cidrs_leave_public_space_reachable():
@@ -206,11 +215,14 @@ def test_denied_cidrs_split_repeatedly_for_several_allowed_addresses():
         assert earlier.broadcast_address < later.network_address
 
 
-def test_denied_cidrs_carve_out_a_resolvable_hostname():
+def test_denied_cidrs_carve_out_a_resolvable_hostname(monkeypatch):
     """Hostnames are resolved so a private endpoint named by DNS is not denied by address."""
-    denied = denied_cidrs(("localhost",), resolver_addresses=())
-    assert not _is_denied("127.0.0.1", denied)
-    assert _is_denied("127.0.0.2", denied)
+    monkeypatch.setattr(
+        egress, "_resolve_host", lambda target: (ipaddress.ip_network("10.0.0.51"),)
+    )
+    denied = denied_cidrs(("private.svc.cluster.local",), resolver_addresses=())
+    assert not _is_denied("10.0.0.51", denied)
+    assert _is_denied("10.0.0.52", denied)
 
 
 def test_denied_cidrs_ignore_wildcard_dns_targets():
@@ -224,6 +236,19 @@ def test_denied_cidrs_carve_out_the_resolver():
     denied = denied_cidrs(resolver_addresses=("10.96.5.5",))
     assert not _is_denied("10.96.5.5", denied)
     assert _is_denied("10.96.5.6", denied)
+
+
+def test_host_egress_policy_explicitly_allows_the_resolver():
+    spec = GymHostSpec(
+        job_id="job-1",
+        runtime_image="runtime:dev",
+        environment_mount=_mount("claim", "/job/environment", True),
+        workspace_mount=_mount("claim", "/job/work", False),
+        resolver_addresses=("10.96.5.5",),
+    )
+    policy = build_host_egress_policy(spec)
+    assert "10.96.5.5" in _allows(policy)
+    assert not _is_denied("10.96.5.5", _denies(policy))
 
 
 def test_denied_cidrs_default_the_resolver_to_the_local_nameservers(tmp_path, monkeypatch):

@@ -65,11 +65,14 @@ DEFAULT_PUBLIC_DNS_SUFFIXES: tuple[str, ...] = ("*.com", "*.org")
 # Everything a sandbox has no business reaching by address. Public space is deliberately absent:
 # it is reached by resolving an allowed domain, which is what makes the whitelist meaningful --
 # an allowed public CIDR would let a sandbox dial any host in it without ever asking the resolver.
+#
+# Loopback is absent too, and must stay that way. It is the sandbox's own network namespace, so it
+# crosses no boundary, and denying it breaks the sandbox outright: the egress sidecar redirects all
+# port-53 traffic to a DNS proxy on 127.0.0.1, and Gym reaches its sub-servers the same way.
 _DENIED_IPV4_CIDRS: tuple[str, ...] = (
     "0.0.0.0/8",
     "10.0.0.0/8",
     "100.64.0.0/10",
-    "127.0.0.0/8",
     "169.254.0.0/16",
     "172.16.0.0/12",
     "192.0.0.0/24",
@@ -86,7 +89,6 @@ _DENIED_IPV4_CIDRS: tuple[str, ...] = (
 # covers IPv4-mapped answers, which would otherwise describe a private v4 destination in v6 form.
 _DENIED_IPV6_CIDRS: tuple[str, ...] = (
     "::/128",
-    "::1/128",
     "::ffff:0:0/96",
     "64:ff9b:1::/48",
     "100::/64",
@@ -251,12 +253,19 @@ def build_sandbox_egress_policy(
         allow_internet=allow_internet,
         public_dns_allow=public_dns_allow,
     )
+    resolvers = (
+        local_resolver_addresses()
+        if resolver_addresses is None
+        else _unique_targets(resolver_addresses)
+    )
+    policy_allow_targets = _unique_targets((*allow_targets, *resolvers))
     rules = [
-        EpisodeEgressRule(target=target, action="allow") for target in allow_targets
+        EpisodeEgressRule(target=target, action="allow")
+        for target in policy_allow_targets
     ]
     rules.extend(
         EpisodeEgressRule(target=target, action="deny")
-        for target in denied_cidrs(allow_targets, resolver_addresses)
+        for target in denied_cidrs(allow_targets, resolvers)
     )
     return EpisodeEgressPolicy(default_action="deny", rules=tuple(rules))
 

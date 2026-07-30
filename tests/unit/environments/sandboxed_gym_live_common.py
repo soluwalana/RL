@@ -376,62 +376,55 @@ def live_actor_py_executable() -> str:
     return get_actor_python_env(SANDBOXED_GYM_ACTOR_FQN)
 
 
-def broker_service_cluster_ip(target: LiveTarget, broker_host: str) -> str | None:
-    """Look up the ClusterIP behind a ``<name>.<namespace>.svc.cluster.local`` broker host.
-
-    The egress policy denies cluster-private space with the allowed addresses subtracted out, and
-    that subtraction needs an address. Service DNS resolves only inside the cluster, so the
-    workbox has to ask the API server for the ClusterIP and allow it alongside the name. In a
-    deployed job the trusted actor shares the cluster resolver and this is unnecessary.
-    """
-    parts = broker_host.split(".")
-    if len(parts) < 3 or parts[2:5] != ["svc", "cluster", "local"]:
-        return None
-    result = kubectl(
-        target,
-        "get",
-        "svc",
-        parts[0],
-        "-n",
-        parts[1],
-        "-o",
-        "jsonpath={.spec.clusterIP}",
-        check=False,
-    )
-    cluster_ip = result.stdout.strip()
-    return cluster_ip or None
-
-
 CLUSTER_DNS_SERVICES: tuple[tuple[str, str], ...] = (
     ("kube-system", "kube-dns"),
     ("kube-system", "coredns"),
 )
 
 
+def service_addresses(target: LiveTarget, namespace: str, name: str) -> tuple[str, ...]:
+    """Return the ClusterIP a Service answers on.
+
+    The ClusterIP is the whole answer: the sandbox's rules match the destination it dials, before
+    kube-proxy rewrites it to an endpoint, so the pod IPs behind the Service never need allowing.
+    A deployed actor gets this from the cluster resolver; the workbox cannot resolve cluster names
+    at all, so it asks the API server instead.
+    """
+    cluster_ip = kubectl(
+        target,
+        "get",
+        "svc",
+        name,
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.spec.clusterIP}",
+        check=False,
+    ).stdout.strip()
+    return (cluster_ip,) if cluster_ip and cluster_ip != "None" else ()
+
+
 def cluster_resolver_addresses(target: LiveTarget) -> tuple[str, ...]:
-    """Look up the cluster DNS ClusterIPs a sandbox resolves through.
+    """Look up the addresses a sandbox's DNS queries actually reach.
 
     The policy defaults to the trusted process's own nameservers, which is right for a deployed
-    actor and wrong from a workbox: the workbox resolves through corporate DNS while the sandbox
-    asks kube-dns, whose ClusterIP is inside the denied cluster-private space. Left denied, the
-    lookup is dropped and nothing resolves -- including the allowed names.
+    actor and wrong from a workbox: the workbox resolves through a systemd stub on loopback while
+    the sandbox asks kube-dns. Left denied, every lookup is dropped and nothing resolves --
+    including the allowed names.
     """
     for namespace, name in CLUSTER_DNS_SERVICES:
-        result = kubectl(
-            target,
-            "get",
-            "svc",
-            name,
-            "-n",
-            namespace,
-            "-o",
-            "jsonpath={.spec.clusterIP}",
-            check=False,
-        )
-        cluster_ip = result.stdout.strip()
-        if cluster_ip:
-            return (cluster_ip,)
+        addresses = service_addresses(target, namespace, name)
+        if addresses:
+            return addresses
     return ()
+
+
+def broker_service_addresses(target: LiveTarget, broker_host: str) -> tuple[str, ...]:
+    """Address behind a ``<name>.<namespace>.svc.cluster.local`` broker host."""
+    parts = broker_host.split(".")
+    if len(parts) < 3 or parts[2:5] != ["svc", "cluster", "local"]:
+        return ()
+    return service_addresses(target, parts[1], parts[0])
 
 
 def episode_broker_block(
@@ -490,7 +483,7 @@ def sandboxed_env_block(
     policy_port: int | None = None,
     broker_host: str | None = None,
     broker_port: int | None = None,
-    broker_cluster_ip: str | None = None,
+    broker_addresses: tuple[str, ...] = (),
     resolver_addresses: tuple[str, ...] | None = None,
 ) -> dict:
     """Build the ``env.nemo_gym`` sandboxed block used by actor / training jobs."""
@@ -508,8 +501,9 @@ def sandboxed_env_block(
         {"host": vllm_host, "port": vllm_port},
         {"host": tunnel_host, "port": tunnel_port},
     ]
-    if broker_cluster_ip:
-        egress_allow.append({"host": broker_cluster_ip, "port": tunnel_port})
+    egress_allow.extend(
+        {"host": address, "port": tunnel_port} for address in broker_addresses
+    )
     network_policy: dict = {"egress_allow": egress_allow}
     if resolver_addresses is not None:
         network_policy["resolver_addresses"] = resolver_addresses
