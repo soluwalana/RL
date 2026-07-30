@@ -12,41 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Egress profile for sandboxes that run untrusted environment code.
+"""Allow-only egress policies for untrusted sandboxes.
 
-The threat this addresses is **east-west**: user code reaching another tenant's pods or Services,
-or the cloud metadata endpoint. Public egress is deliberately permitted -- graders legitimately
-install packages mid-episode -- so the shape is allow-by-default with an explicit deny list of
-cluster-internal ranges, which is what RFC section 5 describes ("allow public tool egress ... but
-deny Pod/Service CIDRs, node-local, and metadata").
-
-Two properties of that shape are worth stating plainly, because they drive how it is deployed:
-
-* **It fails open.** Anything missing from the deny list is reachable. The defaults below cover
-  what a standard cluster uses, but the authoritative ranges are cluster fact and the platform
-  should supply them.
-* **It is not the primary control.** A Kubernetes NetworkPolicy over the sandbox pods -- selected
-  by the ``nemo-rl-job-id`` metadata the broker stamps, which OpenSandbox propagates to pod labels
-  -- is enforced at the CNI, outside the pod, where a compromised in-pod sidecar cannot bypass it.
-  It is also the only layer that can express ports; the OpenSandbox egress sidecar matches on
-  domain/IP/CIDR with no port. This profile is the in-band second layer.
-
-The profile is shared rather than episode-specific: the job sandbox has identical exposure and
-should be given the same ranges.
+Every policy is deny-by-default. Callers may add whitelist targets, but cannot
+submit deny rules. When ``allow_internet`` is true, the whitelist also receives
+safe public IPv4 CIDRs and public DNS suffixes; private, metadata, loopback,
+CGNAT, multicast, and reserved addresses remain blocked by omission.
 """
 
-from typing import Literal
+from __future__ import annotations
+
+import ipaddress
+from functools import lru_cache
+from typing import Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 
 class EpisodeEgressRule(BaseModel):
-    """One egress rule. ``target`` is an FQDN, IP, or CIDR."""
+    """One whitelist rule. ``target`` is an FQDN, IP, or CIDR."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     target: str
-    action: Literal["allow", "deny"] = "allow"
+    action: Literal["allow"] = "allow"
 
 
 class EpisodeEgressPolicy(BaseModel):
@@ -60,58 +49,96 @@ class EpisodeEgressPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    default_action: Literal["allow", "deny"] = "deny"
+    default_action: Literal["deny"] = "deny"
     rules: tuple[EpisodeEgressRule, ...] = ()
 
 
-# Cluster-internal ranges denied by default. Deny rules become nftables element sets in the
-# OpenSandbox egress sidecar, so they match on the resolved destination address -- a hostile
-# domain whose A record points into the cluster is still dropped.
-DEFAULT_CLUSTER_DENY_TARGETS: tuple[str, ...] = (
-    # RFC1918. Pod and Service CIDRs on most clusters.
+DEFAULT_PUBLIC_DNS_SUFFIXES: tuple[str, ...] = ("*.com", "*.org")
+
+_NON_PUBLIC_IPV4_CIDRS: tuple[str, ...] = (
+    "0.0.0.0/8",
     "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-    # Carrier-grade NAT. A common Pod CIDR on GKE and on EKS with custom networking. Omitting it
-    # is the likeliest way for this deny list to silently cover nothing on a real cluster.
     "100.64.0.0/10",
-    # Link-local, which includes the cloud metadata endpoint at 169.254.169.254 that serves node
-    # IAM credentials.
-    "169.254.0.0/16",
     "127.0.0.0/8",
-    # IPv6 loopback, unique-local, and link-local mirror the ranges above.
-    "::1/128",
-    "fc00::/7",
-    "fe80::/10",
-    # IPv4-mapped IPv6. Without this, ::ffff:10.0.5.7 reaches 10.0.5.7 straight past an
-    # IPv4-only deny list -- a standard SSRF filter bypass.
-    "::ffff:0:0/96",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
 )
 
 
-def build_egress_policy(
-    *,
-    default_action: Literal["allow", "deny"],
-    allow_targets: tuple[str, ...] = (),
-    deny_targets: tuple[str, ...] = DEFAULT_CLUSTER_DENY_TARGETS,
-) -> EpisodeEgressPolicy:
-    """Build an egress policy from a default action plus explicit allow and deny targets.
+@lru_cache(maxsize=1)
+def safe_public_ipv4_cidrs() -> tuple[str, ...]:
+    """Return public IPv4 as a minimal CIDR whitelist, never ``0.0.0.0/0``."""
+    remaining = [ipaddress.ip_network("0.0.0.0/0")]
+    for excluded_raw in _NON_PUBLIC_IPV4_CIDRS:
+        excluded = ipaddress.ip_network(excluded_raw)
+        updated: list[ipaddress.IPv4Network] = []
+        for network in remaining:
+            if network.subnet_of(excluded):
+                continue
+            if excluded.subnet_of(network):
+                updated.extend(network.address_exclude(excluded))
+            else:
+                updated.append(network)
+        remaining = updated
+    return tuple(str(network) for network in remaining)
 
-    Allow rules are emitted before deny rules so a narrow carve-out -- an in-cluster package
-    mirror, say -- precedes the broad range denial that would otherwise cover it. The sidecar
-    evaluates domain rules first-match.
 
-    Args:
-        default_action: What happens to traffic no rule matches.
-        allow_targets: Domains, IPs, or CIDRs to allow explicitly.
-        deny_targets: Domains, IPs, or CIDRs to deny explicitly.
-
-    Returns:
-        The assembled :class:`EpisodeEgressPolicy`.
-    """
-    rules = tuple(
-        EpisodeEgressRule(target=target, action="allow") for target in allow_targets
-    ) + tuple(
-        EpisodeEgressRule(target=target, action="deny") for target in deny_targets
+def _unique_targets(targets: Iterable[str]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            target.strip().rstrip(".")
+            for target in targets
+            if target and target.strip().rstrip(".")
+        )
     )
-    return EpisodeEgressPolicy(default_action=default_action, rules=rules)
+
+
+def build_sandbox_allow_targets(
+    *,
+    endpoint_targets: Iterable[str] = (),
+    allow_internet: bool = False,
+    public_dns_allow: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    """Build a sandbox whitelist.
+
+    Public CIDRs and DNS suffixes are added *only* when ``allow_internet=True``.
+    """
+    targets = list(endpoint_targets)
+    if allow_internet:
+        targets.extend(DEFAULT_PUBLIC_DNS_SUFFIXES)
+        targets.extend(public_dns_allow or ())
+        targets.extend(safe_public_ipv4_cidrs())
+    return _unique_targets(targets)
+
+
+def build_sandbox_egress_policy(
+    *,
+    endpoint_targets: Iterable[str] = (),
+    allow_internet: bool = False,
+    public_dns_allow: tuple[str, ...] | None = None,
+) -> EpisodeEgressPolicy:
+    """Build a deny-by-default policy containing allow rules only."""
+    allow_targets = build_sandbox_allow_targets(
+        endpoint_targets=endpoint_targets,
+        allow_internet=allow_internet,
+        public_dns_allow=public_dns_allow,
+    )
+    return EpisodeEgressPolicy(
+        default_action="deny",
+        rules=tuple(
+            EpisodeEgressRule(target=target, action="allow") for target in allow_targets
+        ),
+    )
+
+
+def build_egress_policy(*, allow_targets: tuple[str, ...] = ()) -> EpisodeEgressPolicy:
+    """Compatibility wrapper for an explicit, strict whitelist."""
+    return build_sandbox_egress_policy(endpoint_targets=allow_targets)

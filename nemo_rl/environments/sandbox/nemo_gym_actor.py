@@ -15,13 +15,14 @@
 """Trusted Ray proxy that runs NeMo-Gym inside a job-level sandbox."""
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import urllib.error
 import urllib.request
 from collections import Counter
-from collections.abc import AsyncGenerator, Mapping
-from typing import Any, NotRequired
+from collections.abc import AsyncGenerator, Coroutine, Mapping
+from typing import Any, NotRequired, TypeVar
 from urllib.parse import urlparse
 
 import ray
@@ -47,19 +48,38 @@ from nemo_rl.environments.sandbox.host.models import (
     SandboxConfig,
     build_bootstrap_env,
 )
+from nemo_rl.environments.sandbox.gym_host_runtime import GYM_GLOBAL_CONFIG_ENV_KEY
 from nemo_rl.environments.sandbox.host.provider import get_host_provider
 from nemo_rl.utils.timer import Timer
 
 
 LOGGER = logging.getLogger(__name__)
 
+T = TypeVar("T")
+
+
+def _run_coro_sync(coro: Coroutine[Any, Any, T]) -> T:
+    """Run ``coro`` from sync Ray methods on an async actor.
+
+    ``SandboxedGymActor.run_rollouts`` is async, so Ray installs a running event
+    loop on the actor. Sync methods like ``_spinup`` / ``shutdown`` must not call
+    ``asyncio.run`` on that thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
 SANDBOXED_GYM_ACTOR_FQN = (
     "nemo_rl.environments.sandbox.nemo_gym_actor.SandboxedGymActor"
 )
 
-# Bootstrap reads the Gym global config from this variable instead of a shared
-# filesystem: the runtime image has no access to the training pod's config.
-GYM_GLOBAL_CONFIG_ENV_KEY = "NMP_GYM_GLOBAL_CONFIG"
+# Bootstrap reads the Gym global config from GYM_GLOBAL_CONFIG_ENV_KEY (defined in
+# gym_host_runtime, which stays nemo_rl-import-free) instead of a shared filesystem:
+# the runtime image has no access to the training pod's config.
 
 
 class SandboxedGymActorConfig(NemoGymConfig):
@@ -109,6 +129,30 @@ def build_sandbox_global_config(cfg: SandboxedGymActorConfig) -> dict[str, Any]:
     return global_config
 
 
+def collect_gym_host_egress_allows(
+    *,
+    configured: list[GymHostEgressRule],
+    broker_host: str,
+    broker_port: int,
+    base_urls: list[str | None],
+) -> tuple[GymHostEgressRule, ...]:
+    """Collect and deduplicate trusted job-host whitelist endpoints."""
+    rules = list(configured)
+    rules.append(GymHostEgressRule(host=broker_host, port=broker_port))
+    for base_url in base_urls:
+        if not base_url:
+            continue
+        parsed = urlparse(str(base_url))
+        if not parsed.hostname:
+            continue
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        rules.append(GymHostEgressRule(host=parsed.hostname, port=port))
+    deduped: dict[tuple[str, int], GymHostEgressRule] = {}
+    for rule in rules:
+        deduped.setdefault((rule.host, rule.port), rule)
+    return tuple(deduped.values())
+
+
 def _gym_host_spec_from_config(
     cfg: SandboxedGymActorConfig,
     sandboxed: NemoGymSandboxedConfig,
@@ -148,8 +192,12 @@ def _gym_host_spec_from_config(
         },
     )
 
-    egress_allow = list(sandbox.network_policy.egress_allow)
-    egress_allow.append(GymHostEgressRule(host=broker_host, port=broker_port))
+    egress_allow = collect_gym_host_egress_allows(
+        configured=sandbox.network_policy.egress_allow,
+        broker_host=broker_host,
+        broker_port=broker_port,
+        base_urls=list(cfg.get("base_urls") or []),
+    )
 
     return GymHostSpec(
         job_id=job_id,
@@ -167,14 +215,17 @@ def _gym_host_spec_from_config(
             mount_path=sandbox.work_mount_path,
             read_only=False,
         ),
-        egress_allow=tuple(egress_allow),
+        egress_allow=egress_allow,
         bootstrap_env=bootstrap_env,
         max_request_bytes=sandbox.max_request_bytes,
         max_response_bytes=sandbox.max_response_bytes,
         ttl_s=sandbox.ttl_s,
+        ready_timeout_s=sandbox.ready_timeout_s,
         resources=sandbox.resources,
         runtime_http_port=sandbox.runtime_http_port,
-        deny_internet=sandbox.deny_internet,
+        allow_internet=sandbox.allow_internet,
+        public_dns_allow=sandbox.network_policy.public_dns_allow,
+        entrypoint=tuple(sandbox.entrypoint) if sandbox.entrypoint else None,
     )
 
 
@@ -235,47 +286,33 @@ class SandboxedGymActor(EnvironmentInterface):
             self._broker_endpoint.port,
         )
 
-        # Allow vLLM endpoints advertised to Gym (FQDN/Service DNS only).
-        extra_allows = []
-        for base_url in self.cfg.get("base_urls") or []:
-            if not base_url:
-                continue
-            parsed_vllm = urlparse(str(base_url))
-            if parsed_vllm.hostname and ":" not in parsed_vllm.hostname:
-                if not parsed_vllm.hostname.replace(".", "").isdigit():
-                    port = parsed_vllm.port or (443 if parsed_vllm.scheme == "https" else 80)
-                    extra_allows.append(
-                        GymHostEgressRule(host=parsed_vllm.hostname, port=port)
-                    )
-        if extra_allows:
-            host_spec = host_spec.model_copy(
-                update={
-                    "egress_allow": tuple(
-                        list(host_spec.egress_allow) + extra_allows
-                    )
-                }
-            )
-
         self._host_provider = get_host_provider(
             sandboxed.host_provider,
             sandbox.host_provider_options,
         )
-        self._host_handle = asyncio.run(self._host_provider.create_host(host_spec))
+        self._host_handle = _run_coro_sync(self._host_provider.create_host(host_spec))
         try:
-            asyncio.run(
+            _run_coro_sync(
                 self._host_provider.wait_ready(
                     self._host_handle, sandbox.ready_timeout_s
                 )
             )
         except Exception:
-            asyncio.run(self._host_provider.destroy_host(self._host_handle))
+            _run_coro_sync(self._host_provider.destroy_host(self._host_handle))
             self._host_handle = None
             raise
 
-    def _postprocess(self, nemo_gym_result: dict, tokenizer: PreTrainedTokenizerBase) -> dict:
-        helper = NemoGym.__new__(NemoGym)
+    def _postprocess(
+        self, nemo_gym_result: dict, tokenizer: PreTrainedTokenizerBase
+    ) -> dict:
+        # ``NemoGym`` is a Ray actor class; postprocess helpers live on the
+        # underlying Python class.
+        nemo_gym_cls = NemoGym.__ray_metadata__.modified_class
+        helper = nemo_gym_cls.__new__(nemo_gym_cls)
         helper.cfg = self._postprocess_cfg
-        return helper._postprocess_nemo_gym_to_nemo_rl_result(nemo_gym_result, tokenizer)
+        return helper._postprocess_nemo_gym_to_nemo_rl_result(
+            nemo_gym_result, tokenizer
+        )
 
     def _post_rollouts(self, examples: list[dict]) -> list:
         assert self._host_handle is not None
@@ -289,7 +326,10 @@ class SandboxedGymActor(EnvironmentInterface):
             self._host_handle.rollout_url,
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                **self._host_handle.headers,
+            },
         )
         try:
             with urllib.request.urlopen(
@@ -379,7 +419,7 @@ class SandboxedGymActor(EnvironmentInterface):
         """Destroy the job host, then stop the episode broker."""
         if self._host_provider is not None and self._host_handle is not None:
             try:
-                asyncio.run(self._host_provider.destroy_host(self._host_handle))
+                _run_coro_sync(self._host_provider.destroy_host(self._host_handle))
             except Exception:
                 LOGGER.exception("Failed to destroy sandboxed Gym host")
             self._host_handle = None

@@ -18,9 +18,13 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+if TYPE_CHECKING:
+    from nemo_gym.sandbox.providers.base import SandboxExecResult, SandboxHandle
+    from nemo_gym.sandbox.providers.opensandbox import OpenSandboxProvider
 
 from nemo_rl.environments.sandbox.backends.opensandbox import to_opensandbox_policy
 from nemo_rl.environments.sandbox.config import JOB_ID_METADATA_KEY
@@ -37,6 +41,12 @@ LOGGER = logging.getLogger(__name__)
 _HEALTH_POLL_S = 2.0
 
 
+class _HostRoutes(NamedTuple):
+    health_url: str
+    rollout_url: str
+    headers: dict[str, str]
+
+
 class OpenSandboxGymHostProvider:
     """Provisions the job Gym host through OpenSandbox.
 
@@ -45,6 +55,7 @@ class OpenSandboxGymHostProvider:
     """
 
     name = "opensandbox"
+    provider_class: type["OpenSandboxProvider"]
 
     def __init__(
         self,
@@ -53,8 +64,10 @@ class OpenSandboxGymHostProvider:
         probe: Mapping[str, Any] | None = None,
         operations: Mapping[str, Any] | None = None,
     ) -> None:
+        from nemo_gym.sandbox.providers.base import SandboxHandle
         from nemo_gym.sandbox.providers.opensandbox import OpenSandboxProvider
 
+        self.provider_class = OpenSandboxProvider
         self._connection = dict(connection) if connection else {}
         if "use_server_proxy" not in self._connection:
             self._connection["use_server_proxy"] = True
@@ -63,8 +76,7 @@ class OpenSandboxGymHostProvider:
         self._create_options = dict(create) if create else {}
         self._probe = probe
         self._operations = operations
-        self._provider_cls = OpenSandboxProvider
-        self._provider = None
+        self._resource_handles: dict[str, SandboxHandle] = {}
 
     def _provider_for_spec(self, spec: GymHostSpec):
         egress = build_host_egress_policy(spec)
@@ -73,7 +85,7 @@ class OpenSandboxGymHostProvider:
             **self._create_options,
             "network_policy": to_opensandbox_policy(egress),
         }
-        return self._provider_cls(
+        return self.provider_class(
             connection=self._connection,
             create=create_config,
             probe=self._probe,
@@ -131,6 +143,7 @@ class OpenSandboxGymHostProvider:
         return SandboxSpec(
             image=spec.runtime_image,
             ttl_s=spec.ttl_s,
+            ready_timeout_s=spec.ready_timeout_s,
             env=dict(spec.bootstrap_env),
             metadata=metadata,
             resources=resources,
@@ -138,42 +151,59 @@ class OpenSandboxGymHostProvider:
             provider_options={"volumes": volumes},
         )
 
-    async def _endpoint_urls(
-        self, sandbox: Any, port: int
-    ) -> tuple[str, str]:
+    async def _resolve_routes(self, sandbox: Any, port: int) -> _HostRoutes:
         endpoint = await sandbox.get_endpoint(port)
-        base = str(endpoint.endpoint).rstrip("/")
-        # Proxy paths already include the port root; append API routes.
-        health_url = f"{base}/health"
-        rollout_url = f"{base}/rollouts/run"
-        return health_url, rollout_url
-
-    async def create_host(self, spec: GymHostSpec) -> GymHostHandle:
-        """Create the job host with mounts and egress, then resolve proxy URLs."""
-        provider = self._provider_for_spec(spec)
-        self._provider = provider
-        handle = await provider.create(self._to_sandbox_spec(spec))
-        try:
-            health_url, rollout_url = await self._endpoint_urls(
-                handle.raw, spec.runtime_http_port
-            )
-        except Exception:
-            await provider.close(handle)
-            raise
-        return GymHostHandle(
-            host_id=handle.sandbox_id,
-            health_url=health_url,
-            rollout_url=rollout_url,
-            opaque=handle,
+        base = self._absolute_url(str(endpoint.endpoint)).rstrip("/")
+        return _HostRoutes(
+            health_url=f"{base}/health",
+            rollout_url=f"{base}/rollouts/run",
+            headers={str(k): str(v) for k, v in (endpoint.headers or {}).items()},
         )
 
-    async def wait_ready(self, handle: GymHostHandle, timeout_s: float) -> None:
+    def _absolute_url(self, endpoint: str) -> str:
+        """Give an endpoint a scheme.
+
+        The SDK returns a bare ``host:port/path`` authority, which ``urlopen``
+        rejects outright, so the connection protocol has to be reattached here.
+        """
+        if "://" in endpoint:
+            return endpoint
+        protocol = str(self._connection.get("protocol") or "https")
+        return f"{protocol}://{endpoint.lstrip('/')}"
+
+    async def create_host(
+        self, spec: GymHostSpec
+    ) -> "GymHostHandle[OpenSandboxProvider]":
+        """Create the job host with mounts and egress, then resolve proxy URLs."""
+        provider = self._provider_for_spec(spec)
+        resource_handle = await provider.create(self._to_sandbox_spec(spec))
+        try:
+            routes = await self._resolve_routes(
+                resource_handle.raw, spec.runtime_http_port
+            )
+        except Exception:
+            await provider.close(resource_handle)
+            raise
+        self._resource_handles[resource_handle.sandbox_id] = resource_handle
+        return GymHostHandle(
+            host_id=resource_handle.sandbox_id,
+            health_url=routes.health_url,
+            rollout_url=routes.rollout_url,
+            headers=routes.headers,
+            provider=provider,
+        )
+
+    async def wait_ready(
+        self, handle: "GymHostHandle[OpenSandboxProvider]", timeout_s: float
+    ) -> None:
         """Poll ``health_url`` until status is ready."""
         deadline = asyncio.get_running_loop().time() + timeout_s
         last_error: Exception | None = None
         while asyncio.get_running_loop().time() < deadline:
             try:
-                body = await asyncio.to_thread(self._get_json, handle.health_url)
+                body = await asyncio.to_thread(
+                    self._get_json, handle.health_url, handle.headers
+                )
                 if body.get("status") == "ready":
                     return
                 last_error = RuntimeError(f"host not ready: {body!r}")
@@ -185,8 +215,8 @@ class OpenSandboxGymHostProvider:
             + (f": {last_error}" if last_error is not None else "")
         )
 
-    def _get_json(self, url: str) -> dict[str, Any]:
-        request = Request(url, method="GET")
+    def _get_json(self, url: str, headers: Mapping[str, str]) -> dict[str, Any]:
+        request = Request(url, method="GET", headers=dict(headers))
         try:
             with urlopen(request, timeout=10) as response:
                 payload = response.read()
@@ -198,18 +228,38 @@ class OpenSandboxGymHostProvider:
             raise
         return json.loads(payload.decode("utf-8"))
 
-    async def destroy_host(self, handle: GymHostHandle) -> None:
-        """Terminate the job host."""
-        opaque = handle.opaque
-        if opaque is None:
-            LOGGER.warning("destroy_host called with no opaque handle for %s", handle.host_id)
-            return
-        provider = self._provider
-        if provider is None:
-            from nemo_gym.sandbox.providers.opensandbox import OpenSandboxProvider
+    async def exec_host(
+        self, handle: "GymHostHandle[OpenSandboxProvider]", command: str
+    ) -> "SandboxExecResult":
+        """Run a diagnostic command through the host's provider."""
+        provider, resource_handle = self._provider_state(handle)
+        return await provider.exec(resource_handle, command)
 
-            provider = OpenSandboxProvider(connection=self._connection)
+    def _provider_state(
+        self, handle: "GymHostHandle[OpenSandboxProvider]"
+    ) -> tuple["OpenSandboxProvider", "SandboxHandle"]:
+        provider = handle.provider
+        if provider is None or not isinstance(provider, self.provider_class):
+            actual = type(provider).__name__ if provider is not None else "None"
+            raise TypeError(f"expected {self.provider_class.__name__}, got {actual}")
+        resource_handle = self._resource_handles.get(handle.host_id)
+        if resource_handle is None:
+            raise KeyError(f"no resource handle for Gym host {handle.host_id}")
+        return provider, resource_handle
+
+    async def destroy_host(self, handle: "GymHostHandle[OpenSandboxProvider]") -> None:
+        """Terminate the job host."""
+        resource_handle = self._resource_handles.pop(handle.host_id, None)
+        if resource_handle is None:
+            LOGGER.warning(
+                "destroy_host called with no resource handle for %s", handle.host_id
+            )
+            return
+        provider = handle.provider
+        if provider is None or not isinstance(provider, self.provider_class):
+            actual = type(provider).__name__ if provider is not None else "None"
+            raise TypeError(f"expected {self.provider_class.__name__}, got {actual}")
         try:
-            await provider.close(opaque)
+            await provider.close(resource_handle)
         except Exception:
             LOGGER.exception("Failed to destroy job host %s", handle.host_id)

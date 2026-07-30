@@ -19,12 +19,12 @@ Defines the create/spec and config shapes used by ``SandboxedGymHostProvider`` a
 :mod:`nemo_rl.environments.sandbox.egress`.
 """
 
-from typing import Any, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Generic, Mapping, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nemo_rl.environments.sandbox.config import K8S_LABEL_VALUE_RE
-from nemo_rl.environments.sandbox.egress import DEFAULT_CLUSTER_DENY_TARGETS
 
 
 DEFAULT_RUNTIME_HTTP_PORT = 8080
@@ -42,6 +42,8 @@ FORBIDDEN_BOOTSTRAP_ENV_KEYS = frozenset(
         "RAY_HEAD_NODE_ADDRESS",
     }
 )
+
+TProvider = TypeVar("TProvider")
 
 
 class GymHostVolumeMount(BaseModel):
@@ -63,10 +65,12 @@ class GymHostVolumeMount(BaseModel):
 
 
 class GymHostEgressRule(BaseModel):
-    """Allowed egress destination (Service DNS or FQDN plus port).
+    """Allowed egress destination (FQDN, Service DNS, or IP) plus port.
 
-    ``host`` is the OpenSandbox egress sidecar target. ``port`` is recorded for
-    platform NetworkPolicy emission; the sidecar match is hostname-only.
+    ``host`` is the OpenSandbox egress sidecar target (hostname or IP). ``port``
+    is recorded for platform NetworkPolicy emission; the sidecar match is
+    address/hostname-only. Prefer Service DNS / FQDN for model endpoints; the
+    episode broker may advertise a node IP when no Service DNS exists.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -76,14 +80,10 @@ class GymHostEgressRule(BaseModel):
 
     @field_validator("host")
     @classmethod
-    def _no_raw_pod_ip(cls, value: str) -> str:
+    def _nonempty_host(cls, value: str) -> str:
         host = value.strip().rstrip(".")
         if not host:
             raise ValueError("egress host cannot be blank")
-        if host.replace(".", "").isdigit() or ":" in host:
-            raise ValueError(
-                f"egress host must be an FQDN or Service DNS name, not a raw IP: {value!r}"
-            )
         return host
 
 
@@ -103,12 +103,16 @@ class GymHostSpec(BaseModel):
     max_request_bytes: int = Field(default=DEFAULT_MAX_ROLLOUT_BYTES, gt=0)
     max_response_bytes: int = Field(default=DEFAULT_MAX_ROLLOUT_BYTES, gt=0)
     ttl_s: int | None = DEFAULT_HOST_TTL_S
+    # How long OpenSandbox may wait for the pod to become Running (image pull).
+    ready_timeout_s: float | None = Field(
+        default=float(DEFAULT_HOST_READY_TIMEOUT_S), gt=0
+    )
     resources: Mapping[str, str] | None = None
     runtime_http_port: int = Field(default=DEFAULT_RUNTIME_HTTP_PORT, ge=1, le=65535)
-    # False: allow public internet, deny cluster-private ranges.
-    # True: deny by default; only ``egress_allow`` hosts are reachable.
-    deny_internet: bool = False
-    egress_deny_targets: tuple[str, ...] = DEFAULT_CLUSTER_DENY_TARGETS
+    # Every policy is deny-by-default. This switch explicitly adds the safe
+    # public IPv4 and DNS-suffix whitelist.
+    allow_internet: bool = False
+    public_dns_allow: tuple[str, ...] | None = None
     entrypoint: tuple[str, ...] | None = None
 
     @field_validator("job_id")
@@ -137,23 +141,29 @@ class GymHostSpec(BaseModel):
         return self
 
 
-class GymHostHandle(BaseModel):
-    """Handle returned after a job host is created."""
+@dataclass(frozen=True)
+class GymHostHandle(Generic[TProvider]):
+    """Handle returned after a job host is created.
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    ``provider`` is the provider instance that owns the host. Its internal
+    resource handle remains private to the adapter.
+    """
 
     host_id: str
     health_url: str
     rollout_url: str
-    opaque: Any = None
+    headers: Mapping[str, str] = field(default_factory=dict)
+    provider: TProvider | None = None
 
 
 class SandboxNetworkPolicy(BaseModel):
-    """Egress allowlist under ``env.nemo_gym.sandbox.network_policy``."""
+    """Allow-only egress settings under ``env.nemo_gym.sandbox.network_policy``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     egress_allow: list[GymHostEgressRule] = Field(default_factory=list)
+    # Additional suffixes consulted only when ``allow_internet`` is true.
+    public_dns_allow: tuple[str, ...] | None = None
 
 
 class SandboxConfig(BaseModel):
@@ -170,7 +180,7 @@ class SandboxConfig(BaseModel):
     ttl_s: int = Field(default=DEFAULT_HOST_TTL_S, gt=0)
     network_policy: SandboxNetworkPolicy
     resources: dict[str, str] | None = None
-    deny_internet: bool = False
+    allow_internet: bool = False
     environment_pvc_claim: str = Field(min_length=1)
     environment_sub_path: str = ""
     dataset_pvc_claim: str | None = None
@@ -181,6 +191,7 @@ class SandboxConfig(BaseModel):
     ready_timeout_s: float = Field(default=float(DEFAULT_HOST_READY_TIMEOUT_S), gt=0)
     rollout_timeout_s: float = Field(default=float(DEFAULT_ROLLOUT_TIMEOUT_S), gt=0)
     host_provider_options: dict[str, Any] = Field(default_factory=dict)
+    entrypoint: list[str] | None = None
 
 
 class NemoGymSandboxedConfig(BaseModel):
