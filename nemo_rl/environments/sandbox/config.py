@@ -19,6 +19,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nemo_rl.environments.sandbox.egress import EgressAllowlist
+
 # Metadata keys the broker owns. A caller may not set them, so a backend label can always be
 # trusted to say which job an episode belongs to.
 RESERVED_METADATA_PREFIX = "nemo-rl-"
@@ -77,8 +79,9 @@ class EpisodeBrokerConfig(BaseModel):
     # Episode sandboxes grade model output on CPU; GPUs are opt-in per deployment.
     max_gpu: int = Field(default=0, ge=0)
 
-    # Egress is always deny-by-default and allow-only. Public internet is an
-    # explicit profile that adds safe public CIDRs and DNS suffixes.
+    # Egress is always deny-by-default and allow-only. Public internet is an explicit profile
+    # that adds DNS suffixes -- never a public CIDR, so reaching public space still requires
+    # resolving an allowed name through the sidecar's proxy.
     allow_internet: bool = False
     egress_allow_targets: tuple[str, ...] = ()
     public_dns_allow: tuple[str, ...] | None = None
@@ -141,6 +144,16 @@ class EpisodeBrokerConfig(BaseModel):
         if low is not None and high is not None and low >= high:
             raise ValueError("port_range_low must be less than port_range_high")
         return self
+
+    @property
+    def egress_allowlist(self) -> EgressAllowlist:
+        """This tier's egress inputs, in the shape both sandbox tiers share."""
+        return EgressAllowlist(
+            targets=self.egress_allow_targets,
+            allow_internet=self.allow_internet,
+            public_dns_allow=self.public_dns_allow or (),
+            resolver_addresses=self.resolver_addresses,
+        )
 
 
 class BrokerEndpoint(BaseModel):

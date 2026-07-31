@@ -26,7 +26,7 @@ from nemo_gym.sandbox.broker import EpisodeResources
 from nemo_gym.sandbox.providers.base import SandboxExecResult, SandboxStatus
 from pydantic import BaseModel, ConfigDict, Field
 
-from nemo_rl.environments.sandbox.egress import EpisodeEgressPolicy
+from nemo_rl.environments.sandbox.egress import EgressPolicy
 
 
 class PlatformMount(BaseModel):
@@ -60,7 +60,13 @@ class SanitizedEpisodeSpec(BaseModel):
     resources: EpisodeResources = Field(default_factory=EpisodeResources)
     entrypoint: tuple[str, ...] | None = None
     mounts: tuple[PlatformMount, ...] = ()
-    egress: EpisodeEgressPolicy = Field(default_factory=EpisodeEgressPolicy)
+    # Egress is deliberately absent: it is not per-request. The policy is fixed for the life of
+    # the broker and belongs to the backend that applies it (``EpisodeSandboxBackend.egress``).
+    # A copy here was built separately from the backend's, and construction is not deterministic
+    # -- it reads ``/etc/resolv.conf`` and resolves names at call time -- so the two could hold
+    # different rules. Nothing read those rules, so nothing broke; one policy per broker means
+    # nothing can.
+    #
     # Staged by the broker after ``create`` returns, the same way NeMo-Gym's own sandbox API
     # uploads ``SandboxSpec.files``. Backends must not read this field.
     files: dict[str, bytes] = Field(default_factory=dict)
@@ -84,9 +90,16 @@ class EpisodeSandboxBackend(Protocol):
 
     Implementations hold whatever credential their backend needs. That credential lives only in
     this trusted process; it is never passed to the job sandbox.
+
+    Attributes:
+        name: Backend identifier, matching the ``backend`` config value that selects it.
+        egress: The policy this backend applies to every episode it creates, fixed for the life
+            of the broker. It is the single source of truth for what an episode may reach: the
+            broker reads it when auditing a create rather than rebuilding one to describe.
     """
 
     name: str
+    egress: EgressPolicy
 
     async def create(self, spec: SanitizedEpisodeSpec) -> str:
         """Create one episode sandbox and return its backend-native id."""

@@ -26,14 +26,14 @@ if TYPE_CHECKING:
     from nemo_gym.sandbox.providers.base import SandboxExecResult, SandboxHandle
     from nemo_gym.sandbox.providers.opensandbox import OpenSandboxProvider
 
-from nemo_rl.environments.sandbox.backends.opensandbox import to_opensandbox_policy
 from nemo_rl.environments.sandbox.config import JOB_ID_METADATA_KEY
+from nemo_rl.environments.sandbox.egress import build_egress_policy
 from nemo_rl.environments.sandbox.host.models import (
     GymHostHandle,
     GymHostSpec,
     GymHostVolumeMount,
 )
-from nemo_rl.environments.sandbox.host.provider import build_host_egress_policy
+from nemo_rl.environments.sandbox.opensandbox_policy import create_options_with_policy
 
 
 LOGGER = logging.getLogger(__name__)
@@ -72,22 +72,22 @@ class OpenSandboxGymHostProvider:
         if "use_server_proxy" not in self._connection:
             self._connection["use_server_proxy"] = True
 
-        self._egress = None
         self._create_options = dict(create) if create else {}
         self._probe = probe
         self._operations = operations
         self._resource_handles: dict[str, SandboxHandle] = {}
 
-    def _provider_for_spec(self, spec: GymHostSpec):
-        egress = build_host_egress_policy(spec)
-        self._egress = egress
-        create_config = {
-            **self._create_options,
-            "network_policy": to_opensandbox_policy(egress),
-        }
+    def _provider_for_spec(self, spec: GymHostSpec) -> "OpenSandboxProvider":
+        """Build a provider bound to this spec's egress policy.
+
+        The policy is per-spec rather than per-provider, so it is not stashed on ``self``: one
+        provider instance may create several hosts, and a policy read back off the provider would
+        describe whichever one happened to be created last.
+        """
+        egress = build_egress_policy(spec.egress_allowlist)
         return self.provider_class(
             connection=self._connection,
-            create=create_config,
+            create=create_options_with_policy(self._create_options, egress),
             probe=self._probe,
             operations=self._operations,
         )
@@ -238,13 +238,20 @@ class OpenSandboxGymHostProvider:
         provider, resource_handle = self._provider_state(handle)
         return await provider.exec(resource_handle, command, timeout_s=timeout_s)
 
-    def _provider_state(
+    def _require_provider(
         self, handle: "GymHostHandle[OpenSandboxProvider]"
-    ) -> tuple["OpenSandboxProvider", "SandboxHandle"]:
+    ) -> "OpenSandboxProvider":
+        """Return the handle's provider, or raise if it is not one of ours."""
         provider = handle.provider
         if provider is None or not isinstance(provider, self.provider_class):
             actual = type(provider).__name__ if provider is not None else "None"
             raise TypeError(f"expected {self.provider_class.__name__}, got {actual}")
+        return provider
+
+    def _provider_state(
+        self, handle: "GymHostHandle[OpenSandboxProvider]"
+    ) -> tuple["OpenSandboxProvider", "SandboxHandle"]:
+        provider = self._require_provider(handle)
         resource_handle = self._resource_handles.get(handle.host_id)
         if resource_handle is None:
             raise KeyError(f"no resource handle for Gym host {handle.host_id}")
@@ -258,10 +265,7 @@ class OpenSandboxGymHostProvider:
                 "destroy_host called with no resource handle for %s", handle.host_id
             )
             return
-        provider = handle.provider
-        if provider is None or not isinstance(provider, self.provider_class):
-            actual = type(provider).__name__ if provider is not None else "None"
-            raise TypeError(f"expected {self.provider_class.__name__}, got {actual}")
+        provider = self._require_provider(handle)
         try:
             await provider.close(resource_handle)
         except Exception:

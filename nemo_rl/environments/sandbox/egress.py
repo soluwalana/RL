@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Egress policies for untrusted sandboxes.
+"""Egress policies for sandboxes.
+
+Shared by both sandbox tiers: the job-level Gym host (:mod:`nemo_rl.environments.sandbox.host`)
+and the per-episode sandboxes behind the broker
+(:mod:`nemo_rl.environments.sandbox.backends`). Neither owns this vocabulary, so nothing here is
+named for either.
 
 Callers supply allow targets only; deny CIDRs for non-public space are computed here with those
 addresses subtracted. Explicit denies are required because OpenSandbox ``dns+nft`` learns A/AAAA
@@ -36,7 +41,7 @@ IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 RESOLV_CONF_PATH = "/etc/resolv.conf"
 
 
-class EpisodeEgressRule(BaseModel):
+class EgressRule(BaseModel):
     """One egress rule. ``target`` is an FQDN, IP, or CIDR."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -45,7 +50,7 @@ class EpisodeEgressRule(BaseModel):
     action: Literal["allow", "deny"] = "allow"
 
 
-class EpisodeEgressPolicy(BaseModel):
+class EgressPolicy(BaseModel):
     """Egress policy applied to a sandbox.
 
     Always sent explicitly, even when it has no rules. A backend that treats an absent policy as
@@ -57,7 +62,33 @@ class EpisodeEgressPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     default_action: Literal["deny"] = "deny"
-    rules: tuple[EpisodeEgressRule, ...] = ()
+    rules: tuple[EgressRule, ...] = ()
+
+
+class EgressAllowlist(BaseModel):
+    """The allow-only inputs a sandbox tier supplies to policy construction.
+
+    Both tiers describe egress with exactly these four values, so they carry this model rather
+    than four loose fields each. Building a policy is then one function with one call shape, and
+    the two tiers cannot drift apart in what they can express.
+
+    Attributes:
+        targets: Allowed FQDNs, addresses, or CIDRs. Wildcard suffixes such as ``*.com`` are
+            permitted and contribute no deny-range carve-out, since they name no fixed address.
+        allow_internet: Whether to append the public DNS suffixes. Never adds a public CIDR:
+            public space is reached by resolving an allowed name, which is what keeps the
+            whitelist meaningful.
+        public_dns_allow: Extra suffixes consulted only when ``allow_internet`` is set.
+        resolver_addresses: Nameservers to keep out of the deny ranges. ``None`` means use this
+            process's own resolvers; an empty tuple deliberately carves nothing out.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    targets: tuple[str, ...] = ()
+    allow_internet: bool = False
+    public_dns_allow: tuple[str, ...] = ()
+    resolver_addresses: tuple[str, ...] | None = None
 
 
 DEFAULT_PUBLIC_DNS_SUFFIXES: tuple[str, ...] = ("*.com", "*.org")
@@ -216,60 +247,46 @@ def denied_cidrs(
     return tuple(str(network) for network in denied)
 
 
-def build_sandbox_allow_targets(
-    *,
-    endpoint_targets: Iterable[str] = (),
-    allow_internet: bool = False,
-    public_dns_allow: tuple[str, ...] | None = None,
-) -> tuple[str, ...]:
-    """Build a sandbox whitelist.
+def _allow_targets(allowlist: EgressAllowlist) -> tuple[str, ...]:
+    """Expand an allowlist into the whitelist its rules are drawn from.
 
-    Public DNS suffixes are added only when ``allow_internet=True``. No public CIDR is ever added:
-    public space is reachable by resolving an allowed name, which is the mechanism the whitelist
-    is expressed in.
+    Public DNS suffixes are added only when ``allow_internet`` is set. No public CIDR is ever
+    added: public space is reachable by resolving an allowed name, which is the mechanism the
+    whitelist is expressed in.
     """
-    targets = list(endpoint_targets)
-    if allow_internet:
+    targets = list(allowlist.targets)
+    if allowlist.allow_internet:
         targets.extend(DEFAULT_PUBLIC_DNS_SUFFIXES)
-        targets.extend(public_dns_allow or ())
+        targets.extend(allowlist.public_dns_allow)
     return _unique_targets(targets)
 
 
-def build_sandbox_egress_policy(
-    *,
-    endpoint_targets: Iterable[str] = (),
-    allow_internet: bool = False,
-    public_dns_allow: tuple[str, ...] | None = None,
-    resolver_addresses: Iterable[str] | None = None,
-) -> EpisodeEgressPolicy:
+def build_egress_policy(allowlist: EgressAllowlist) -> EgressPolicy:
     """Build a deny-by-default policy from an allow-only whitelist.
 
     The deny rules are emitted whether or not ``allow_internet`` is set. They close the
     DNS-learned path into private space, and which names a sandbox may resolve is not the only way
     it can come to hold one.
+
+    Args:
+        allowlist: The tier's allow-only inputs.
+
+    Returns:
+        A policy whose ``default_action`` is ``deny``, carrying one allow rule per whitelisted
+        target and one deny rule per non-public range that survives the carve-outs.
     """
-    allow_targets = build_sandbox_allow_targets(
-        endpoint_targets=endpoint_targets,
-        allow_internet=allow_internet,
-        public_dns_allow=public_dns_allow,
-    )
+    allow_targets = _allow_targets(allowlist)
     resolvers = (
         local_resolver_addresses()
-        if resolver_addresses is None
-        else _unique_targets(resolver_addresses)
+        if allowlist.resolver_addresses is None
+        else _unique_targets(allowlist.resolver_addresses)
     )
     policy_allow_targets = _unique_targets((*allow_targets, *resolvers))
     rules = [
-        EpisodeEgressRule(target=target, action="allow")
-        for target in policy_allow_targets
+        EgressRule(target=target, action="allow") for target in policy_allow_targets
     ]
     rules.extend(
-        EpisodeEgressRule(target=target, action="deny")
+        EgressRule(target=target, action="deny")
         for target in denied_cidrs(allow_targets, resolvers)
     )
-    return EpisodeEgressPolicy(default_action="deny", rules=tuple(rules))
-
-
-def build_egress_policy(*, allow_targets: tuple[str, ...] = ()) -> EpisodeEgressPolicy:
-    """Compatibility wrapper for an explicit, strict whitelist."""
-    return build_sandbox_egress_policy(endpoint_targets=allow_targets)
+    return EgressPolicy(default_action="deny", rules=tuple(rules))

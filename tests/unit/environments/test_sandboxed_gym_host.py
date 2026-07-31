@@ -29,7 +29,7 @@ from nemo_rl.environments.sandbox.host.models import (
     build_bootstrap_env,
     validate_bootstrap_env,
 )
-from nemo_rl.environments.sandbox.host.provider import build_host_egress_policy
+from nemo_rl.environments.sandbox.egress import build_egress_policy
 
 
 def _mount(claim: str, path: str, read_only: bool) -> GymHostVolumeMount:
@@ -109,7 +109,7 @@ def test_host_egress_policy_allow_internet_is_still_default_deny():
         egress_allow=(GymHostEgressRule(host="vllm.svc.cluster.local", port=8000),),
         allow_internet=True,
     )
-    policy = build_host_egress_policy(spec)
+    policy = build_egress_policy(spec.egress_allowlist)
     assert policy.default_action == "deny"
     assert {"vllm.svc.cluster.local", "*.com", "*.org"} <= _allows(policy)
     # Public space is reached by resolving an allowed name, never by allowing the address range:
@@ -131,7 +131,7 @@ def test_host_egress_policy_without_internet_has_no_dns_suffixes():
         public_dns_allow=("*.io",),
         resolver_addresses=(),
     )
-    policy = build_host_egress_policy(spec)
+    policy = build_egress_policy(spec.egress_allowlist)
     assert policy.default_action == "deny"
     assert _allows(policy) == {"broker.svc.cluster.local"}
     # Deny rules are not conditional on allow_internet: a sandbox can come to hold a private
@@ -148,7 +148,7 @@ def test_host_egress_policy_adds_custom_public_dns_suffixes():
         allow_internet=True,
         public_dns_allow=("*.io",),
     )
-    assert {"*.com", "*.org", "*.io"} <= _allows(build_host_egress_policy(spec))
+    assert {"*.com", "*.org", "*.io"} <= _allows(build_egress_policy(spec.egress_allowlist))
 
 
 @pytest.mark.parametrize(
@@ -246,7 +246,7 @@ def test_host_egress_policy_explicitly_allows_the_resolver():
         workspace_mount=_mount("claim", "/job/work", False),
         resolver_addresses=("10.96.5.5",),
     )
-    policy = build_host_egress_policy(spec)
+    policy = build_egress_policy(spec.egress_allowlist)
     assert "10.96.5.5" in _allows(policy)
     assert not _is_denied("10.96.5.5", _denies(policy))
 

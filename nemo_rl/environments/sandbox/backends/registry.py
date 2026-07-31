@@ -17,11 +17,16 @@
 from nemo_rl.environments.sandbox.backends.base import EpisodeSandboxBackend
 from nemo_rl.environments.sandbox.backends.memory import InMemoryEpisodeBackend
 from nemo_rl.environments.sandbox.config import EpisodeBrokerConfig
-from nemo_rl.environments.sandbox.egress import build_sandbox_egress_policy
+from nemo_rl.environments.sandbox.egress import build_egress_policy
 
 
 def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
     """Instantiate the episode backend named by ``config``.
+
+    The egress policy is built exactly once, here, and handed to the backend. Every consumer --
+    the create path, the audit record -- reads it back off the backend rather than rebuilding it,
+    because construction is not deterministic: it reads ``/etc/resolv.conf`` and resolves names at
+    call time.
 
     Args:
         config: Broker configuration.
@@ -33,13 +38,15 @@ def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
         ValueError: If the in-memory backend is selected without the explicit insecure opt-in, or
             the backend name is unknown.
     """
+    egress = build_egress_policy(config.egress_allowlist)
+
     if config.backend == "memory":
         if not config.allow_insecure_memory_backend:
             raise ValueError(
                 "Episode backend 'memory' provisions no real sandbox and applies no isolation. "
                 "Set allow_insecure_memory_backend=true to use it in development or tests."
             )
-        return InMemoryEpisodeBackend()
+        return InMemoryEpisodeBackend(egress)
 
     if config.backend == "opensandbox":
         from nemo_rl.environments.sandbox.backends.opensandbox import (
@@ -47,12 +54,7 @@ def build_backend(config: EpisodeBrokerConfig) -> EpisodeSandboxBackend:
         )
 
         return OpenSandboxEpisodeBackend(
-            egress=build_sandbox_egress_policy(
-                endpoint_targets=config.egress_allow_targets,
-                allow_internet=config.allow_internet,
-                public_dns_allow=config.public_dns_allow,
-                resolver_addresses=config.resolver_addresses,
-            ),
+            egress=egress,
             verification=config.egress_verification,
             **config.backend_options,
         )

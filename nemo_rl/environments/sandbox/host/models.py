@@ -26,8 +26,10 @@ from nemo_gym.sandbox.broker import BROKER_TOKEN_ENV, BROKER_URL_ENV
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nemo_rl.environments.sandbox.config import K8S_LABEL_VALUE_RE
+from nemo_rl.environments.sandbox.egress import EgressAllowlist
 
 
+DEFAULT_JOB_ID = "nemo-rl-job"
 DEFAULT_RUNTIME_HTTP_PORT = 8080
 DEFAULT_MAX_ROLLOUT_BYTES = 268_435_456  # 256 MiB
 DEFAULT_HOST_TTL_S = 14_400  # 4 hours
@@ -110,8 +112,9 @@ class GymHostSpec(BaseModel):
     )
     resources: Mapping[str, str] | None = None
     runtime_http_port: int = Field(default=DEFAULT_RUNTIME_HTTP_PORT, ge=1, le=65535)
-    # Every policy is deny-by-default. This switch explicitly adds the safe
-    # public IPv4 and DNS-suffix whitelist.
+    # Every policy is deny-by-default. This switch explicitly adds the public DNS-suffix
+    # whitelist -- never a public CIDR, so reaching public space still requires resolving an
+    # allowed name through the sidecar's proxy.
     allow_internet: bool = False
     public_dns_allow: tuple[str, ...] | None = None
     # Nameservers to keep out of the deny ranges. Defaults to the trusted process's own.
@@ -142,6 +145,20 @@ class GymHostSpec(BaseModel):
         if self.workspace_mount.read_only:
             raise ValueError("workspace_mount must be read-write")
         return self
+
+    @property
+    def egress_allowlist(self) -> EgressAllowlist:
+        """This tier's egress inputs, in the shape both sandbox tiers share.
+
+        ``GymHostEgressRule.port`` is dropped: the sidecar matches on address or hostname only,
+        and the port is carried for platform NetworkPolicy emission instead.
+        """
+        return EgressAllowlist(
+            targets=tuple(rule.host for rule in self.egress_allow),
+            allow_internet=self.allow_internet,
+            public_dns_allow=self.public_dns_allow or (),
+            resolver_addresses=self.resolver_addresses,
+        )
 
 
 @dataclass(frozen=True)
@@ -208,8 +225,18 @@ class NemoGymSandboxedConfig(BaseModel):
     host_provider: str = "opensandbox"
     environment_path: str | None = None
     sandbox: SandboxConfig | None = None
-    job_id: str | None = None
+    job_id: str = DEFAULT_JOB_ID
     episode_broker: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("job_id", mode="before")
+    @classmethod
+    def _default_job_id(cls, value: str | None) -> str | None:
+        # The platform compiler may emit an explicit null or an empty string rather than omitting
+        # the key. All three mean "unset", and the default belongs here rather than at each
+        # reader's call site. Anything else is passed through for the field's own validation.
+        if value is None or value == "":
+            return DEFAULT_JOB_ID
+        return value
 
     @model_validator(mode="after")
     def _require_sandbox_when_enabled(self) -> "NemoGymSandboxedConfig":

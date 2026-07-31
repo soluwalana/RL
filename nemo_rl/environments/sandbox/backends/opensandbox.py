@@ -22,7 +22,6 @@ caller supplied can ride along, and establishing the egress policy at the only m
 allows it.
 """
 
-import ipaddress
 import logging
 import tempfile
 from collections.abc import Mapping
@@ -43,35 +42,14 @@ from nemo_rl.environments.sandbox.backends.base import (
     SanitizedEpisodeSpec,
     UnsupportedEpisodeOperationError,
 )
-from nemo_rl.environments.sandbox.egress import EpisodeEgressPolicy
+from nemo_rl.environments.sandbox.egress import EgressPolicy
+from nemo_rl.environments.sandbox.opensandbox_policy import (
+    canonical_egress_target,
+    create_options_with_policy,
+)
 
 
 LOGGER = logging.getLogger(__name__)
-
-
-def to_opensandbox_policy(policy: EpisodeEgressPolicy) -> dict[str, Any]:
-    """Render an egress policy in the shape the OpenSandbox sidecar expects."""
-    return {
-        "defaultAction": policy.default_action,
-        "egress": [
-            {"action": rule.action, "target": rule.target} for rule in policy.rules
-        ],
-    }
-
-
-def canonical_egress_target(target: str) -> str:
-    """Canonicalize an egress target so two spellings of the same range compare equal.
-
-    The sidecar does not echo the policy it was given -- it re-serializes a merged one, with
-    operator-managed always-rules and nameserver addresses folded in. Go renders an IPv4-mapped
-    prefix as ``::ffff:0.0.0.0/96`` where we send ``::ffff:0:0/96``, and casing of IPv6 literals is
-    not guaranteed either. Parsing both sides removes that class of false mismatch; anything that
-    is not an address or network is treated as a domain.
-    """
-    try:
-        return str(ipaddress.ip_network(target, strict=False))
-    except ValueError:
-        return target.strip().rstrip(".").lower()
 
 
 class OpenSandboxEpisodeBackend:
@@ -86,7 +64,7 @@ class OpenSandboxEpisodeBackend:
     def __init__(
         self,
         *,
-        egress: EpisodeEgressPolicy,
+        egress: EgressPolicy,
         connection: Mapping[str, Any] | None = None,
         create: Mapping[str, Any] | None = None,
         probe: Mapping[str, Any] | None = None,
@@ -95,18 +73,12 @@ class OpenSandboxEpisodeBackend:
     ) -> None:
         from nemo_gym.sandbox.providers.opensandbox import OpenSandboxProvider
 
-        self._egress = egress
+        self.egress = egress
         self._verification = verification
-        # The broker owns the egress policy outright: whatever a deployment puts in the create
-        # block, ours is what reaches the SDK.
-        create_config = {
-            **(dict(create) if create else {}),
-            "network_policy": to_opensandbox_policy(egress),
-        }
         self._connection = dict(connection) if connection else {}
         self._provider = OpenSandboxProvider(
             connection=self._connection,
-            create=create_config,
+            create=create_options_with_policy(create, egress),
             probe=probe,
             operations=operations,
         )
@@ -192,10 +164,10 @@ class OpenSandboxEpisodeBackend:
 
         applied = await get_policy()
         applied_default = getattr(applied, "default_action", None)
-        if applied_default != self._egress.default_action:
+        if applied_default != self.egress.default_action:
             raise EpisodeBackendError(
                 f"episode {handle.sandbox_id} applied egress default_action="
-                f"{applied_default!r}, expected {self._egress.default_action!r}"
+                f"{applied_default!r}, expected {self.egress.default_action!r}"
             )
 
         applied_targets = {
@@ -207,7 +179,7 @@ class OpenSandboxEpisodeBackend:
         }
         missing = sorted(
             (rule.action, rule.target)
-            for rule in self._egress.rules
+            for rule in self.egress.rules
             if (rule.action, canonical_egress_target(rule.target))
             not in applied_targets
         )

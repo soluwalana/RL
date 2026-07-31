@@ -344,7 +344,7 @@ def build_broker_app(
             image=spec.image,
             ttl_s=spec.ttl_s,
             staged_files=len(spec.files),
-            egress_default_action=spec.egress.default_action,
+            egress_default_action=backend.egress.default_action,
         )
         return EpisodeCreateResponse(episode_id=episode_id)
 

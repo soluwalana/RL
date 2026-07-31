@@ -16,10 +16,6 @@
 
 from typing import Protocol, TypeVar
 
-from nemo_rl.environments.sandbox.egress import (
-    EpisodeEgressPolicy,
-    build_sandbox_egress_policy,
-)
 from nemo_rl.environments.sandbox.host.models import GymHostHandle, GymHostSpec
 
 
@@ -43,17 +39,6 @@ class SandboxedGymHostProvider(Protocol[TProvider]):
 
     async def destroy_host(self, handle: GymHostHandle[TProvider]) -> None:
         """Terminate the host. Best-effort; must not raise after a successful destroy."""
-
-
-def build_host_egress_policy(spec: GymHostSpec) -> EpisodeEgressPolicy:
-    """Build an allow-only, deny-by-default job-host policy."""
-    allow_targets = tuple(rule.host for rule in spec.egress_allow)
-    return build_sandbox_egress_policy(
-        endpoint_targets=allow_targets,
-        allow_internet=spec.allow_internet,
-        public_dns_allow=spec.public_dns_allow,
-        resolver_addresses=spec.resolver_addresses,
-    )
 
 
 def get_host_provider(

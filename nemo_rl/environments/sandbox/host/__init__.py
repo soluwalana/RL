@@ -27,7 +27,6 @@ from nemo_rl.environments.sandbox.host.models import (
 )
 from nemo_rl.environments.sandbox.host.provider import (
     SandboxedGymHostProvider,
-    build_host_egress_policy,
     get_host_provider,
 )
 
@@ -42,7 +41,6 @@ __all__ = [
     "SandboxNetworkPolicy",
     "SandboxedGymHostProvider",
     "build_bootstrap_env",
-    "build_host_egress_policy",
     "get_host_provider",
     "validate_bootstrap_env",
 ]

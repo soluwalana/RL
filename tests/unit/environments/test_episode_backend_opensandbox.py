@@ -38,10 +38,12 @@ from nemo_rl.environments.sandbox.backends.base import (
     UnsupportedEpisodeOperationError,
 )
 from nemo_rl.environments.sandbox.egress import (
-    EpisodeEgressPolicy,
-    EpisodeEgressRule,
+    EgressAllowlist,
+    EgressPolicy,
+    EgressRule,
     build_egress_policy,
 )
+from nemo_rl.environments.sandbox.opensandbox_policy import to_opensandbox_policy
 
 
 pytestmark = pytest.mark.nemo_gym
@@ -135,14 +137,19 @@ def fake_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gym_opensandbox, "OpenSandboxProvider", FakeProvider)
 
 
+def make_allowlist(**overrides) -> EgressAllowlist:
+    """An allowlist that does not depend on this machine's ``/etc/resolv.conf``."""
+    settings: dict[str, Any] = {"targets": ("pypi.org",), "resolver_addresses": ()}
+    settings.update(overrides)
+    return EgressAllowlist(**settings)
+
+
 def make_backend(**overrides):
     from nemo_rl.environments.sandbox.backends.opensandbox import (
         OpenSandboxEpisodeBackend,
     )
 
-    settings: dict[str, Any] = {
-        "egress": build_egress_policy(allow_targets=("pypi.org",))
-    }
+    settings: dict[str, Any] = {"egress": build_egress_policy(make_allowlist())}
     settings.update(overrides)
     return OpenSandboxEpisodeBackend(**settings)
 
@@ -153,7 +160,6 @@ def make_spec(**overrides) -> SanitizedEpisodeSpec:
         "image": "registry.example.com/swe/grader:1.0",
         "ttl_s": 300.0,
         "metadata": {"nemo-rl-job-id": "job-1"},
-        "egress": build_egress_policy(allow_targets=("pypi.org",)),
     }
     settings.update(overrides)
     return SanitizedEpisodeSpec(**settings)
@@ -169,7 +175,10 @@ def test_egress_policy_reaches_the_provider_at_construction():
 
     policy = FakeProvider.instances[0].create_config["network_policy"]
     assert policy["defaultAction"] == "deny"
-    assert policy["egress"] == [{"action": "allow", "target": "pypi.org"}]
+    assert {"action": "allow", "target": "pypi.org"} in policy["egress"]
+    # The deny rules ride along with the allow. They are the half that closes the DNS-learned
+    # path into private space, so a policy carrying only the allow would not be this policy.
+    assert {"action": "deny", "target": "10.0.0.0/8"} in policy["egress"]
 
 
 def test_broker_owned_policy_overrides_a_configured_one():
@@ -215,10 +224,14 @@ async def test_default_verification_warns_on_missing_rules_rather_than_failing(c
 
 @pytest.mark.asyncio
 async def test_reformatted_targets_do_not_count_as_missing():
-    # Equivalent IPv6 CIDR spellings are not a real gap.
+    # Equivalent IPv6 CIDR spellings are not a real gap. The policy is built literally rather
+    # than through build_egress_policy: this test is about target comparison, and a constructed
+    # policy would also carry the deny CIDRs that strict verification would then demand back.
     backend = make_backend(
         verification="strict",
-        egress=build_egress_policy(allow_targets=("2001:DB8::/32",)),
+        egress=EgressPolicy(
+            rules=(EgressRule(target="2001:DB8::/32", action="allow"),)
+        ),
     )
     FakeProvider.instances[0].applied_policy = {
         "defaultAction": "deny",
@@ -264,12 +277,10 @@ async def test_verification_can_be_disabled():
 
 
 def test_policy_rendering_uses_the_sidecar_field_names():
-    from nemo_rl.environments.sandbox.backends.opensandbox import to_opensandbox_policy
-
     rendered = to_opensandbox_policy(
-        EpisodeEgressPolicy(
+        EgressPolicy(
             default_action="deny",
-            rules=(EpisodeEgressRule(target="broker.svc", action="allow"),),
+            rules=(EgressRule(target="broker.svc", action="allow"),),
         )
     )
 
@@ -399,12 +410,17 @@ def test_registry_builds_the_backend_with_the_configured_egress_profile():
             backend="opensandbox",
             allow_internet=False,
             egress_allow_targets=("pypi.org",),
+            resolver_addresses=(),
         )
     )
 
     assert backend.name == "opensandbox"
     policy = FakeProvider.instances[0].create_config["network_policy"]
-    assert policy == {
-        "defaultAction": "deny",
-        "egress": [{"action": "allow", "target": "pypi.org"}],
-    }
+    # The rendering that reached the provider is the backend's own policy, unmodified.
+    assert policy == to_opensandbox_policy(backend.egress)
+    assert policy["defaultAction"] == "deny"
+    assert {"action": "allow", "target": "pypi.org"} in policy["egress"]
+    # allow_internet is off, so no public suffix is granted.
+    assert not any(rule["target"].startswith("*") for rule in policy["egress"]), (
+        "internet must stay off unless allow_internet is set"
+    )

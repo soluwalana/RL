@@ -163,7 +163,6 @@ def _gym_host_spec_from_config(
 ) -> GymHostSpec:
     sandbox = sandboxed.sandbox
     assert sandbox is not None
-    job_id = sandboxed.job_id or "nemo-rl-job"
 
     dataset_path = None
     dataset_mount = None
@@ -177,7 +176,7 @@ def _gym_host_spec_from_config(
         )
 
     bootstrap_env = build_bootstrap_env(
-        job_id,
+        sandboxed.job_id,
         sandboxed.environment_path or sandbox.env_mount_path,
         sandbox.work_mount_path,
         broker_url,
@@ -200,7 +199,7 @@ def _gym_host_spec_from_config(
     )
 
     return GymHostSpec(
-        job_id=job_id,
+        job_id=sandboxed.job_id,
         runtime_image=sandbox.image,
         environment_mount=GymHostVolumeMount(
             pvc_claim=sandbox.environment_pvc_claim,
@@ -263,9 +262,8 @@ class SandboxedGymActor(EnvironmentInterface):
         self._max_request_bytes = sandbox.max_request_bytes
         self._max_response_bytes = sandbox.max_response_bytes
 
-        job_id = sandboxed.job_id or "nemo-rl-job"
         broker_cfg = EpisodeBrokerConfig.model_validate(
-            {"job_id": job_id, **dict(sandboxed.episode_broker)}
+            {"job_id": sandboxed.job_id, **dict(sandboxed.episode_broker)}
         )
         self._broker_actor, self._broker_endpoint = start_episode_broker(
             broker_cfg,
