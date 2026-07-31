@@ -28,6 +28,7 @@ from nemo_rl.environments.sandbox.backends.base import (
     EpisodeBackendError,
     SanitizedEpisodeSpec,
 )
+from nemo_rl.environments.sandbox.egress import EgressPolicy
 
 
 LOGGER = logging.getLogger(__name__)
@@ -44,11 +45,14 @@ class InMemoryEpisodeBackend:
 
     name = "memory"
 
-    def __init__(self) -> None:
+    def __init__(self, egress: EgressPolicy) -> None:
         LOGGER.warning(
             "Episode broker is using the in-memory backend. No episode sandbox is created and no "
             "isolation is applied. This backend is for development and tests only."
         )
+        # Recorded so audit output reads the same as any other backend. Nothing enforces it here;
+        # that is the point of the two-key opt-in that selects this backend.
+        self.egress = egress
         self._episodes: dict[str, _MemoryEpisode] = {}
         self._counter = 0
 

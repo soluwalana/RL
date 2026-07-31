@@ -33,6 +33,11 @@ from nemo_rl.environments.sandbox.backends.base import (
 from nemo_rl.environments.sandbox.backends.memory import InMemoryEpisodeBackend
 from nemo_rl.environments.sandbox.backends.registry import build_backend
 from nemo_rl.environments.sandbox.config import JOB_ID_METADATA_KEY, EpisodeBrokerConfig
+from nemo_rl.environments.sandbox.egress import (
+    DEFAULT_PUBLIC_DNS_SUFFIXES,
+    EgressPolicy,
+    build_egress_policy,
+)
 from nemo_rl.environments.sandbox.http_app import build_broker_app, close_all_episodes
 
 
@@ -47,9 +52,17 @@ class RecordingBackend(InMemoryEpisodeBackend):
     """In-memory backend that records specs and can be told to fail."""
 
     def __init__(
-        self, *, fail_on: str | None = None, unsupported_user: bool = False
+        self,
+        *,
+        fail_on: str | None = None,
+        unsupported_user: bool = False,
+        egress: EgressPolicy | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            egress
+            if egress is not None
+            else build_egress_policy(make_config().egress_allowlist)
+        )
         self.specs: list[SanitizedEpisodeSpec] = []
         self.closed: list[str] = []
         self._fail_on = fail_on
@@ -309,10 +322,19 @@ def test_job_id_is_stamped_into_backend_metadata(client, backend):
 def test_mounts_stay_empty_and_egress_is_strict_by_default(client, backend):
     create_episode(client)
 
-    spec = backend.specs[0]
-    assert spec.mounts == ()
-    assert spec.egress.default_action == "deny"
-    assert spec.egress.rules == ()
+    assert backend.specs[0].mounts == ()
+
+    # Asserted against the policy the backend applies, not a second one rebuilt to describe it:
+    # construction reads /etc/resolv.conf and resolves names, so a rebuild can disagree.
+    policy = backend.egress
+    assert policy.default_action == "deny"
+    allowed = {rule.target for rule in policy.rules if rule.action == "allow"}
+    assert allowed.isdisjoint(DEFAULT_PUBLIC_DNS_SUFFIXES), (
+        "internet must stay off unless allow_internet is set"
+    )
+    assert any(rule.action == "deny" for rule in policy.rules), (
+        "non-public ranges must be denied explicitly, not by omission"
+    )
 
 
 # --------------------------------------------------------------------------------------------
