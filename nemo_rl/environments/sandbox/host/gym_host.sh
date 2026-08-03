@@ -12,6 +12,8 @@ root=${2:-/opt/nemo-rl}
 gym_rw=${3:-/tmp/gym-src/Gym}
 runtime=${4:-$root/nemo_rl/environments/sandbox/gym_host_runtime.py}
 
+# Copy Gym to a writable path only because /opt/gym_venvs is not writable by
+# uid 1000 under OpenSandbox. Remove this once that directory is writable.
 if [ ! -d "$gym_rw/nemo_gym" ]; then
     mkdir -p "$(dirname "$gym_rw")"
     cp -a "$root/3rdparty/Gym-workspace/Gym" "$gym_rw"
