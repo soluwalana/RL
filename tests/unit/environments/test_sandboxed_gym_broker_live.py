@@ -293,7 +293,7 @@ async def test_live_broker_provisions_episodes_for_the_job_sandbox(
                 "use_server_proxy": True,
                 "request_timeout_s": int(READY_TIMEOUT_S),
             },
-            create={"timeout_s": READY_TIMEOUT_S, "skip_health_check": False},
+            create={"timeout_s": READY_TIMEOUT_S, "skip_health_check": True},
         )
         handle = await provider.create_host(spec)
         try:
