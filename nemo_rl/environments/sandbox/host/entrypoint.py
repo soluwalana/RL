@@ -20,6 +20,11 @@ is root-owned while OpenSandbox pods run as uid 1000. Gym derives its working
 dir from ``nemo_gym.__file__`` and writes ``cache/nemo_gym.egg-info`` when
 building per-app venvs, so the host must run against a writable Gym copy.
 
+The writable Gym source copy (``DEFAULT_GYM_WRITABLE_SRC``, applied in
+``gym_host.sh``) is a workaround: ``/opt/gym_venvs`` is not writable by
+uid 1000. Once the image makes that directory writable for the sandbox user,
+use it for per-app venvs and remove the source-tree copy.
+
 ``/opt/nemo_rl_venv`` also lacks the ``nemo_gym[sandbox]`` extra, and
 ``uv sync --extra nemo_gym`` cannot complete from the image's offline uv cache
 (missing daytona/socketio wheels). The image does bake a per-Ray-worker venv for
@@ -38,6 +43,8 @@ SANDBOXED_GYM_ACTOR_VENV = (
 )
 # Writable by uid 1000 in the image; /opt/uv_cache is root-owned and read-only.
 DEFAULT_GYM_UV_CACHE_DIR = "/home/ubuntu/.cache/uv"
+# Root-owned in the image today, so uid 1000 cannot write here. That is why we
+# copy Gym to a writable path; fix the permissions and drop the copy.
 DEFAULT_GYM_UV_VENV_DIR = "/opt/gym_venvs"
 DEFAULT_GYM_WRITABLE_SRC = "/tmp/gym-src/Gym"
 
