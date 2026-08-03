@@ -14,6 +14,9 @@
 
 """Job-level Gym host provisioning (models, provider protocol, OpenSandbox backend)."""
 
+from nemo_rl.environments.sandbox.host.entrypoint import (
+    default_gym_host_entrypoint,
+)
 from nemo_rl.environments.sandbox.host.models import (
     GymHostEgressRule,
     GymHostHandle,
@@ -41,6 +44,7 @@ __all__ = [
     "SandboxNetworkPolicy",
     "SandboxedGymHostProvider",
     "build_bootstrap_env",
+    "default_gym_host_entrypoint",
     "get_host_provider",
     "validate_bootstrap_env",
 ]

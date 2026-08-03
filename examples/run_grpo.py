@@ -258,7 +258,8 @@ def main() -> None:
                     )
         finally:
             if not trainer_owns_environment_shutdown:
-                shutdown_environments(task_to_env, val_task_to_env)
+                # OpenSandbox destroy_host needs longer than the default.
+                shutdown_environments(task_to_env, val_task_to_env, timeout=300)
             try:
                 policy_generation.shutdown()
             except Exception as error:

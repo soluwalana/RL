@@ -4750,7 +4750,9 @@ def grpo_train(
             processor=processor,
         )
     finally:
-        shutdown_environments(task_to_env, val_task_to_env)
+        # OpenSandbox destroy_host needs longer than the default. A short
+        # timeout falls through to ray.kill and leaves BatchSandbox CRs behind.
+        shutdown_environments(task_to_env, val_task_to_env, timeout=300)
 
 
 def validate(
@@ -6679,7 +6681,9 @@ def async_grpo_train(
             print(f"Error stopping replay buffer: {e}")
 
         # Environments can have in-flight HTTP requests to generation workers.
-        shutdown_environments(task_to_env, val_task_to_env)
+        # OpenSandbox destroy_host needs longer than the default. A short
+        # timeout falls through to ray.kill and leaves BatchSandbox CRs behind.
+        shutdown_environments(task_to_env, val_task_to_env, timeout=300)
 
         print("🛑 Shutting down generation workers...")
         try:

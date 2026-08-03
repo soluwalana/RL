@@ -28,24 +28,24 @@ from urllib.parse import urlparse
 
 import pytest
 
+from nemo_rl.environments.sandbox.host.entrypoint import (
+    SANDBOXED_GYM_ACTOR_VENV as NEMO_RL_IMAGE_GYM_VENV,
+    default_gym_host_entrypoint,
+)
+
 
 _LIVE_RUNTIME_PATH = Path(__file__).with_name("sandboxed_gym_host_live_runtime.py")
 _LIVE_RUNTIME_SOURCE = _LIVE_RUNTIME_PATH.read_text(encoding="utf-8")
-_GYM_HOST_RUNTIME_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "nemo_rl/environments/sandbox/gym_host_runtime.py"
-)
-_GYM_HOST_RUNTIME_SOURCE = _GYM_HOST_RUNTIME_PATH.read_text(encoding="utf-8")
 NEMO_RL_IMAGE_GIT_ROOT = "/opt/nemo-rl"
-# Baked venv in nvcr.io/nvidia/nemo-rl. It carries nemo_rl but *not* the nemo_gym
-# extra, and the image ships uv under /root/.local/bin (not /bin/uv or PATH).
-NEMO_RL_IMAGE_VENV = "/opt/nemo_rl_venv"
+# Prefer the SandboxedGymActor Ray worker venv (has nemo_gym[sandbox]). The
+# image-wide /opt/nemo_rl_venv does not, and offline ``uv sync --extra nemo_gym``
+# cannot complete from the baked cache. See host/entrypoint.py.
+NEMO_RL_IMAGE_VENV = NEMO_RL_IMAGE_GYM_VENV  # back-compat alias for live helpers
 REAL_GYM_SANDBOX_RESOURCES = {"cpu": "2", "memory": "8Gi"}
 STUB_SANDBOX_RESOURCES = {"cpu": "250m", "memory": "512Mi"}
 
-# Host image candidates (Gym lives under the image's NeMo-RL ``3rdparty`` and is
-# installed into the baked venv by ``real_gym_entrypoint`` — same package set as
-# ``PY_EXECUTABLES.NEMO_GYM`` / colocated ``NemoGym``). Override with
+# Host image candidates. Real Gym hosts use ``default_gym_host_entrypoint``
+# (SandboxedGymActor venv + writable Gym copy). Override with
 # ``OPENSANDBOX_LIVE_RUNTIME_IMAGE``. Default stays slim+stub for host-provider
 # plumbing tests that do not need a real Gym tree.
 NEMO_RL_BASE_IMAGE = "nvcr.io/nvidia/nemo-rl:v0.7.0"
@@ -282,38 +282,8 @@ def stub_entrypoint() -> list[str]:
 
 
 def real_gym_entrypoint() -> list[str]:
-    """Start ``gym_host_runtime`` inside the NeMo-RL image.
-
-    The image's venv already resolves every heavy dependency, so we add only the
-    ``nemo_gym`` extra into it (``--inexact`` keeps the existing packages, and the
-    baked uv cache makes it an offline ~5s install of ~20 small wheels). Building a
-    fresh ``uv run`` environment instead would re-materialize torch and friends.
-
-    ``uv`` is looked up across known locations because the published image puts it
-    in ``/root/.local/bin`` and OpenSandbox's bootstrap shell has no login PATH.
-    """
-    encoded = base64.b64encode(_GYM_HOST_RUNTIME_SOURCE.encode("utf-8")).decode("ascii")
-    script = textwrap.dedent(f"""
-        set -eu
-        venv={NEMO_RL_IMAGE_VENV}
-        root={NEMO_RL_IMAGE_GIT_ROOT}
-        uv=""
-        for c in "$(command -v uv || true)" /root/.local/bin/uv /usr/local/bin/uv /bin/uv; do
-            if [ -n "$c" ] && [ -x "$c" ]; then uv="$c"; break; fi
-        done
-        if [ -z "$uv" ]; then
-            echo "gym-host: no uv binary found in image" >&2
-            exit 127
-        fi
-        echo "gym-host: syncing nemo_gym extra into $venv using $uv" >&2
-        VIRTUAL_ENV="$venv" UV_PROJECT_ENVIRONMENT="$venv" UV_OFFLINE=1 \\
-            "$uv" sync --locked --inexact --active --no-group build \\
-            --extra nemo_gym --directory "$root" >&2
-        echo "{encoded}" | base64 -d > /tmp/gym_host_runtime.py
-        cd "$root"
-        exec "$venv/bin/python" /tmp/gym_host_runtime.py
-    """).strip()
-    return ["/bin/sh", "-c", script]
+    """Start ``gym_host_runtime`` inside the NeMo-RL / nmp-rl-training image."""
+    return default_gym_host_entrypoint()
 
 
 def colocated_parity_global_config_dict() -> dict:
@@ -456,7 +426,7 @@ def episode_broker_block(
             "create": {
                 "timeout_s": READY_TIMEOUT_S,
                 "request_timeout_s": int(READY_TIMEOUT_S),
-                "skip_health_check": False,
+                "skip_health_check": True,
             },
         },
         "approved_image_prefixes": EPISODE_IMAGE_PREFIXES,
@@ -532,7 +502,7 @@ def sandboxed_env_block(
             "create": {
                 "timeout_s": READY_TIMEOUT_S,
                 "request_timeout_s": int(READY_TIMEOUT_S),
-                "skip_health_check": False,
+                "skip_health_check": True,
             },
         },
     }

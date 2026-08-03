@@ -134,7 +134,8 @@ def _apply_uv_dirs(global_config: dict[str, Any]) -> None:
 
 def bootstrap_gym_host() -> tuple[Any, Any, Any]:
     """Start Gym servers and return (RunHelper, head_server_config, RolloutCollectionHelper)."""
-    from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
+    from nemo_gym.cli.env import RunHelper
+    from nemo_gym.global_config import GlobalConfigDictParserConfig
     from nemo_gym.server_utils import BaseServerConfig, HEAD_SERVER_KEY_NAME
     from omegaconf import DictConfig
 

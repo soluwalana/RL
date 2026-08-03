@@ -16,6 +16,7 @@ import argparse
 import os
 import pprint
 import time
+from typing import Any
 
 # Increase the W&B single object size warning threshold. Initially 100_000 (100 KB) -> 10_000_000 (10 MB)
 import wandb.util
@@ -61,6 +62,36 @@ from nemo_rl.utils.config import (
 from nemo_rl.utils.logger import get_next_experiment_dir, log_container_init_timing
 from nemo_rl.utils.outdated_config_checks import check_outdated_config
 from nemo_rl.utils.timer import Timer
+
+
+_SENSITIVE_CONFIG_KEYS = {
+    "api_key",
+    "broker_token",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _redact_config_secrets(value: Any) -> Any:
+    """Return a printable config copy with credential values removed."""
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            normalized = str(key).lower()
+            if (
+                normalized in _SENSITIVE_CONFIG_KEYS
+                or normalized.endswith("_api_key")
+                or normalized.endswith("_password")
+                or normalized.endswith("_secret")
+            ):
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = _redact_config_secrets(item)
+        return redacted
+    if isinstance(value, (list, tuple)):
+        return [_redact_config_secrets(item) for item in value]
+    return value
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -243,7 +274,7 @@ The validation set you pass in will directly be used for validation with no addi
 
     # Print config
     print("Final config:")
-    pprint.pprint(config)
+    pprint.pprint(_redact_config_secrets(config.model_dump(mode="python")))
 
     with rl_init_timer.time("ray_connect"):
         # Must precede init_ray() — see maybe_configure_data_plane_env's docstring.
@@ -367,7 +398,8 @@ The validation set you pass in will directly be used for validation with no addi
             )
     finally:
         if not trainer_owns_environment_shutdown:
-            shutdown_environments(task_to_env, val_task_to_env)
+            # OpenSandbox destroy_host needs longer than the default.
+            shutdown_environments(task_to_env, val_task_to_env, timeout=300)
         try:
             policy_generation.shutdown()
         except Exception as error:

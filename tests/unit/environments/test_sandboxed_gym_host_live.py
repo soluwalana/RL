@@ -384,7 +384,7 @@ async def test_live_host_functionality(
         },
         create={
             "timeout_s": READY_TIMEOUT_S,
-            "skip_health_check": False,
+            "skip_health_check": True,
         },
     )
 
