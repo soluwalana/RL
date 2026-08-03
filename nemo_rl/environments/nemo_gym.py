@@ -117,7 +117,7 @@ from nemo_rl.telemetry.span_groups import RLSpanGroup
 from nemo_rl.utils.config import warn_if_config_path_overridden
 from nemo_rl.utils.routed_experts_codec import decode_routed_experts
 from nemo_rl.utils.timer import Timer
-from nemo_rl.utils.venvs import make_actor_runtime_env
+from nemo_rl.utils.venvs import git_root, make_actor_runtime_env
 
 NEMO_GYM_ACTOR_FQN = "nemo_rl.environments.nemo_gym.NemoGym"
 NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S = 120
@@ -406,7 +406,16 @@ def get_nemo_gym_uv_cache_dir() -> str | None:
     """
     if not os.environ.get("NRL_CONTAINER"):
         return None
-    return subprocess.check_output(["uv", "cache", "dir"]).decode().strip()
+    # --directory pins uv's project discovery to the NeMo-RL checkout, as
+    # create_local_venv does. Without it uv walks up from the caller's working
+    # directory and adopts whatever pyproject.toml it finds there - including that
+    # project's [tool.uv] required-version, which makes `uv cache dir` exit non-zero
+    # when it disagrees with the uv on PATH.
+    return (
+        subprocess.check_output(["uv", "cache", "dir", "--directory", git_root])
+        .decode()
+        .strip()
+    )
 
 
 def get_nemo_gym_venv_dir() -> str | None:

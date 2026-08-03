@@ -47,6 +47,7 @@ from nemo_rl.environments.sandbox.host.models import (
     NemoGymSandboxedConfig,
     SandboxConfig,
     build_bootstrap_env,
+    uv_env_passthrough,
 )
 from nemo_rl.environments.sandbox.gym_host_runtime import GYM_GLOBAL_CONFIG_ENV_KEY
 from nemo_rl.environments.sandbox.host.provider import get_host_provider
@@ -187,7 +188,8 @@ def _gym_host_spec_from_config(
         extra={
             GYM_GLOBAL_CONFIG_ENV_KEY: json.dumps(
                 build_sandbox_global_config(cfg), sort_keys=True
-            )
+            ),
+            **uv_env_passthrough(),
         },
     )
 

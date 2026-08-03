@@ -69,6 +69,7 @@ constraints = [
     { name = "dulwich", specifier = ">=1.2.5" },
     { name = "emerging-optimizers", git = "https://github.com/NVIDIA-NeMo/Emerging-Optimizers.git?rev=v0.3.0" },
     { name = "fast-hadamard-transform", git = "https://github.com/Dao-AILab/fast-hadamard-transform.git?rev=f134af63deb2df17e1171a9ec1ea4a7d8604d5ca" },
+    { name = "gitpython", specifier = ">=3.1.58" },
     { name = "megatron-fsdp", git = "https://github.com/yuhezhang-ai/Megatron-LM.git?subdirectory=megatron%2Fcore%2Fdistributed%2Ffsdp%2Fsrc&rev=455389c480af6b3acdca74c7830c68b3274eb083" },
     { name = "onnx", specifier = ">=1.21.0rc4" },
     { name = "opencv-python-headless", specifier = ">=5.0.0" },

@@ -19,6 +19,7 @@ Defines the create/spec and config shapes used by ``SandboxedGymHostProvider`` a
 :mod:`nemo_rl.environments.sandbox.egress`.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Generic, Mapping, TypeVar
 
@@ -260,6 +261,19 @@ def validate_bootstrap_env(env: Mapping[str, str]) -> None:
                 raise ValueError(
                     f"bootstrap_env must not contain OpenSandbox credential key {key!r}"
                 )
+
+
+def uv_env_passthrough() -> dict[str, str]:
+    """Env the in-sandbox Gym host needs to find the image-baked uv cache / venv dirs.
+
+    Forwarded rather than assumed: the sandbox image is configurable, so it may not set
+    these itself. None is a credential, so all are safe to cross the boundary.
+    """
+    return {
+        key: os.environ[key]
+        for key in ("NRL_CONTAINER", "UV_CACHE_DIR", "NEMO_GYM_VENV_DIR")
+        if os.environ.get(key)
+    }
 
 
 def build_bootstrap_env(
