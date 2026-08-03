@@ -31,6 +31,7 @@ The two port patches ship their own suites. These cover the remaining two:
 import ast
 import logging
 import os
+import tempfile
 
 import pytest
 
@@ -163,3 +164,72 @@ def test_init_workers_ray_reports_success_and_is_idempotent(monkeypatch, tmp_pat
 
     assert patches._patch_vllm_init_workers_ray("py-exec", None) is True
     assert ray_executor.read_text() == once
+
+
+# --- read-only / shared-file guards (nmp sandboxed-Gym work) -------------------
+
+requires_non_root = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root bypasses directory permission bits, so read-only cannot be simulated",
+)
+
+RAY_EXECUTOR_SOURCE = """\
+class RayDistributedExecutor:
+    def _init_executor(self):
+        self._init_workers_ray(placement_group)
+"""
+
+
+@pytest.fixture
+def vllm_file(tmp_path):
+    """A stand-in for site-packages/vllm/v1/executor/ray_executor.py."""
+    pkg = tmp_path / "site-packages" / "vllm" / "v1" / "executor"
+    pkg.mkdir(parents=True)
+    target = pkg / "ray_executor.py"
+    target.write_text(RAY_EXECUTOR_SOURCE)
+    return target
+
+
+def test_lock_is_written_next_to_the_file_when_writable(vllm_file):
+    """Unchanged behavior on a normal writable install."""
+    with patches._locked_file_patch(str(vllm_file)) as (content, _):
+        assert "_init_workers_ray" in content
+        assert (vllm_file.parent / "ray_executor.py.patch_lock").exists()
+
+
+@requires_non_root
+def test_lock_falls_back_to_tmp_when_directory_is_read_only(vllm_file):
+    vllm_file.parent.chmod(0o555)
+    try:
+        with patches._locked_file_patch(str(vllm_file)) as (content, _):
+            assert "_init_workers_ray" in content
+        assert not (vllm_file.parent / "ray_executor.py.patch_lock").exists()
+        assert os.path.exists(patches._fallback_lock_path(str(vllm_file)))
+    finally:
+        vllm_file.parent.chmod(0o755)
+
+
+def test_fallback_lock_is_shared_by_symlinks_to_one_target(vllm_file, tmp_path):
+    """Two venvs pointing into one uv cache entry must serialize on one lock."""
+    link = tmp_path / "other_venv_ray_executor.py"
+    link.symlink_to(vllm_file)
+
+    assert patches._fallback_lock_path(str(link)) == patches._fallback_lock_path(
+        str(vllm_file)
+    )
+    assert patches._fallback_lock_path(str(vllm_file)).startswith(tempfile.gettempdir())
+
+
+def test_repatching_with_the_same_interpreter_does_not_rewrite(vllm_file, monkeypatch):
+    """The read-only path depends on this: an already-correct file is not touched."""
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _rel: str(vllm_file))
+    py_exec = "/opt/ray_venvs/worker_a/bin/python"
+
+    patches._patch_vllm_init_workers_ray(py_exec, None)
+    first = vllm_file.read_text()
+    mtime = vllm_file.stat().st_mtime_ns
+
+    patches._patch_vllm_init_workers_ray(py_exec, None)
+
+    assert vllm_file.read_text() == first
+    assert vllm_file.stat().st_mtime_ns == mtime

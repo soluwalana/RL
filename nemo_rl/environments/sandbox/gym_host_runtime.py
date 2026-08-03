@@ -25,10 +25,13 @@ import asyncio
 import json
 import os
 import socket
+import subprocess
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 GYM_GLOBAL_CONFIG_ENV_KEY = "NMP_GYM_GLOBAL_CONFIG"
+UV_CACHE_DIR_KEY = "uv_cache_dir"
+UV_VENV_DIR_KEY = "uv_venv_dir"
 # Mirrors DEFAULT_GYM_PORT_RANGE_{LOW,HIGH} in nemo_rl.distributed.virtual_cluster.
 DEFAULT_GYM_PORT_RANGE_LOW = 5000
 DEFAULT_GYM_PORT_RANGE_HIGH = 5999
@@ -90,6 +93,45 @@ def _create_rollout_helper() -> Any:
     return RolloutCollectionHelper()
 
 
+def _uv_cache_dir() -> str | None:
+    """Cache dir uv resolves to here, or None to let Gym pick its own.
+
+    Mirrors ``nemo_rl.environments.nemo_gym.get_nemo_gym_uv_cache_dir``, duplicated
+    because this module must stay importable without ``nemo_rl``.
+    """
+    if not os.environ.get("NRL_CONTAINER"):
+        return None
+    # Prefer the explicit env var. The container image sets it, and it sidesteps
+    # `uv cache dir`, which exits non-zero whenever the working directory's
+    # pyproject.toml pins a [tool.uv] required-version that disagrees with the uv on
+    # PATH - true in the nemo-platform image, whose WORKDIR is the platform workspace.
+    configured = os.environ.get("UV_CACHE_DIR")
+    if configured:
+        return configured
+    try:
+        resolved = subprocess.check_output(["uv", "cache", "dir"], text=True).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return resolved or None
+
+
+def _apply_uv_dirs(global_config: dict[str, Any]) -> None:
+    """Point Gym at the image-baked uv cache / venv dirs.
+
+    The colocated path does this in ``NemoGym._spinup``, but the sandboxed path returns
+    before it, so the host applies it here from the sandbox's own environment. These must
+    land in the CONFIG, not just the environment: Gym overwrites ``UV_CACHE_DIR`` from the
+    config key, so without it Gym falls back to ``<Gym>/cache/uv`` in the read-only image
+    tree and every per-app server dies with EACCES.
+    """
+    cache_dir = _uv_cache_dir()
+    if cache_dir:
+        global_config.setdefault(UV_CACHE_DIR_KEY, cache_dir)
+    venv_dir = os.environ.get("NEMO_GYM_VENV_DIR")
+    if venv_dir:
+        global_config.setdefault(UV_VENV_DIR_KEY, venv_dir)
+
+
 def bootstrap_gym_host() -> tuple[Any, Any, Any]:
     """Start Gym servers and return (RunHelper, head_server_config, RolloutCollectionHelper)."""
     from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
@@ -97,6 +139,7 @@ def bootstrap_gym_host() -> tuple[Any, Any, Any]:
     from omegaconf import DictConfig
 
     global_config = _load_global_config_dict()
+    _apply_uv_dirs(global_config)
     head_port = _allocate_head_server_port(global_config)
 
     run_helper = RunHelper()

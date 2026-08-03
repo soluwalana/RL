@@ -58,7 +58,9 @@ def create_local_venv(
     #
     # You can override this location by setting the NEMO_RL_VENV_DIR environment variable
 
-    NEMO_RL_VENV_DIR = os.path.normpath(
+    # abspath, not normpath: the uv calls below run with --directory, so a relative
+    # NEMO_RL_VENV_DIR would resolve against the NeMo-RL checkout instead.
+    NEMO_RL_VENV_DIR = os.path.abspath(
         os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR)
     )
     logger.info(f"NEMO_RL_VENV_DIR is set to {NEMO_RL_VENV_DIR}.")
@@ -77,7 +79,18 @@ def create_local_venv(
     logger.info(f"Creating new venv at {venv_path}")
 
     # Create the virtual environment
-    uv_venv_cmd = ["uv", "venv", "--allow-existing", venv_path]
+    #
+    # --directory pins uv's project discovery to the NeMo-RL checkout; without it
+    # `uv venv` picks up whatever pyproject.toml is in the caller's working
+    # directory, including that project's [tool.uv] required-version.
+    uv_venv_cmd = [
+        "uv",
+        "venv",
+        "--directory",
+        git_root,
+        "--allow-existing",
+        venv_path,
+    ]
     subprocess.run(uv_venv_cmd, check=True)
 
     # Execute the command with the virtual environment
@@ -108,7 +121,7 @@ def _env_builder(
     py_executable: str, venv_name: str, node_idx: int, force_rebuild: bool = False
 ):
     # Check if another node is already building
-    NEMO_RL_VENV_DIR = os.path.normpath(
+    NEMO_RL_VENV_DIR = os.path.abspath(
         os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR)
     )
     venv_path = Path(NEMO_RL_VENV_DIR) / venv_name
