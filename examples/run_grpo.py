@@ -255,9 +255,7 @@ def main() -> None:
                 if env_id in seen_envs:
                     continue
                 seen_envs.add(env_id)
-                print(
-                    f"[shutdown] Shutting down environment {task_name}...", flush=True
-                )
+                print(f"🛑 Shutting down environment {task_name}...", flush=True)
                 try:
                     ray.get(env.shutdown.remote(), timeout=300)
                 except Exception as e:

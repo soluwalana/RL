@@ -5119,7 +5119,7 @@ def async_grpo_train(
                 if env_id in seen_envs:
                     continue
                 seen_envs.add(env_id)
-                print(f"[shutdown] Shutting down environment {task_name}...")
+                print(f"🛑 Shutting down environment {task_name}...")
                 try:
                     ray.get(env.shutdown.remote(), timeout=300)
                 except Exception as e:
@@ -5127,9 +5127,7 @@ def async_grpo_train(
                     try:
                         ray.kill(env)
                     except Exception as kill_error:
-                        print(
-                            f"Error killing environment {task_name}: {kill_error}"
-                        )
+                        print(f"Error killing environment {task_name}: {kill_error}")
 
         print("🛑 Shutting down generation workers...")
         try:
