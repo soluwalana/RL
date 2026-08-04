@@ -304,6 +304,8 @@ def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
         base_urls=["http://vllm.svc:8000/v1"],
         model_name="model-x",
         enable_router_replay=False,
+        routed_experts_dtype="int16",
+        use_fastokens=False,
     )
     assert handle is not None
     assert created["cfg"]["model_name"] == "model-x"
@@ -356,6 +358,8 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
         base_urls=["http://vllm.svc:8000/v1"],
         model_name="model-x",
         enable_router_replay=True,
+        routed_experts_dtype="int16",
+        use_fastokens=False,
     )
     assert handle is not None
     assert created["cfg"]["require_routed_experts"] is True
