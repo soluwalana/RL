@@ -30,9 +30,7 @@ from transformers import AutoProcessor
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.async_utils.replay_buffer import TQReplayBuffer
-from nemo_rl.algorithms.grpo import (
-    MasterConfig as GrpoMasterConfig,
-)
+from nemo_rl.algorithms.grpo import MasterConfig as GrpoMasterConfig
 from nemo_rl.algorithms.grpo import (
     _create_advantage_estimator,
     _should_use_nemo_gym,
@@ -51,6 +49,10 @@ from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.environments.nemo_gym import spinup_nemo_gym_actor
 from nemo_rl.experience.rollout_manager import RolloutManager
+from nemo_rl.experience.rollouts import should_mask_flagged_samples
+from nemo_rl.models.generation.interfaces import (
+    resolve_routed_experts_dtype_name_for_model,
+)
 from nemo_rl.models.generation.sglang.config import SGLangConfig
 from nemo_rl.models.generation.sglang.sglang_generation import SGLangGeneration
 from nemo_rl.models.generation.vllm import VllmGeneration
@@ -241,11 +243,11 @@ def _clamp_max_num_steps(
 ) -> None:
     """Clamp grpo.max_num_steps to max_num_epochs * len(dataloader)."""
     grpo_config = master_config.grpo
-    max_num_epochs = grpo_config.get("max_num_epochs")
+    max_num_epochs = grpo_config.max_num_epochs
     if max_num_epochs is None:
         return
-    grpo_config["max_num_steps"] = min(
-        grpo_config["max_num_steps"],
+    grpo_config.max_num_steps = min(
+        grpo_config.max_num_steps,
         max_num_epochs * len(dataloader),
     )
 
@@ -256,7 +258,7 @@ def _maybe_inject_megatron_train_iters(master_config: MasterConfig) -> None:
     if not policy_config.get("megatron_cfg", {}).get("enabled", False):
         return
     grpo_config = master_config.grpo
-    policy_config["megatron_cfg"]["train_iters"] = grpo_config["max_num_steps"]
+    policy_config["megatron_cfg"]["train_iters"] = grpo_config.max_num_steps
 
 
 def setup_single_controller(
@@ -286,11 +288,7 @@ def setup_single_controller(
     generation_config = policy_config["generation"]
     data_config = master_config.data
 
-    if (
-        grpo_config["val_period"] > 0
-        or grpo_config["val_at_start"]
-        or grpo_config["val_at_end"]
-    ):
+    if grpo_config.val_period > 0 or grpo_config.val_at_start or grpo_config.val_at_end:
         raise NotImplementedError(
             "SingleController doesn't support validation now, will support "
             "later. Set grpo.val_period=0, val_at_start=false, val_at_end=false."
@@ -318,7 +316,7 @@ def setup_single_controller(
             "data.use_multiple_dataloader=True yet."
         )
 
-    set_seed(grpo_config["seed"])
+    set_seed(grpo_config.seed)
 
     # ==========================
     # Setup Dataset & Environments
@@ -345,7 +343,7 @@ def setup_single_controller(
         dataset, _val_dataset, env_handles, _val_env_handles = response_data
     dataloader = StatefulDataLoader(
         dataset,
-        batch_size=grpo_config["num_prompts_per_step"],
+        batch_size=grpo_config.num_prompts_per_step,
         shuffle=data_config["shuffle"],
         collate_fn=rl_collate_fn,
         drop_last=True,
@@ -384,12 +382,19 @@ def setup_single_controller(
     if use_nemo_gym:
         # TODO(#2625): Mirror GRPO's deferred vLLM load so NeMo-Gym spinup
         # overlaps model loading instead of running serially afterward.
-        enable_router_replay = router_replay_enabled(master_config.policy)
+        enable_router_replay = router_replay_enabled(policy_config)
+        routed_experts_dtype = (
+            resolve_routed_experts_dtype_name_for_model(generation_config["model_name"])
+            if enable_router_replay
+            else "int16"
+        )
         env_handles["nemo_gym"] = spinup_nemo_gym_actor(
             env_configs=master_config.env,
             base_urls=generation.dp_openai_server_base_urls,
             model_name=generation_config["model_name"],
             enable_router_replay=enable_router_replay,
+            routed_experts_dtype=routed_experts_dtype,
+            use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
         )
 
     # ==========================
@@ -423,16 +428,18 @@ def setup_single_controller(
         dp_client,
         partition_id=partition_id,
         pad_value_dict={"token_ids": pad_id, "input_ids": pad_id},
+        require_routed_experts=router_replay_enabled(policy_config),
     )
     rollout_manager = RolloutManager(
         tokenizer=tokenizer,
         task_to_env=env_handles,
-        num_generations_per_prompt=grpo_config["num_generations_per_prompt"],
+        num_generations_per_prompt=grpo_config.num_generations_per_prompt,
         max_seq_len=_generation_max_seq_len(generation_config),
-        max_rollout_turns=grpo_config.get("max_rollout_turns"),
+        max_rollout_turns=grpo_config.max_rollout_turns,
         policy_generation=generation,
         generation_config=generation_config,
         use_nemo_gym=use_nemo_gym,
+        mask_env_flagged_samples=should_mask_flagged_samples(master_config.env),
         tq_buffer=tq_buffer,
     )
 
