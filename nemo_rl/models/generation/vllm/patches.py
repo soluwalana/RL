@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import os
+import tempfile
 from contextlib import contextmanager
 from importlib.util import find_spec
 
@@ -46,13 +48,29 @@ def _get_vllm_file(relative_path: str) -> str:
     return file_path
 
 
+def _fallback_lock_path(file_path: str) -> str:
+    """Lock path to use when the patched file's own directory is not writable.
+
+    Keyed on the RESOLVED target so concurrent patchers still serialize against
+    each other when several venvs reach one underlying file through symlinks or
+    hardlinks into a shared uv cache.
+    """
+    digest = hashlib.sha256(os.path.realpath(file_path).encode()).hexdigest()
+    return os.path.join(tempfile.gettempdir(), f"nemo_rl_vllm_patch_{digest[:32]}.lock")
+
+
 @contextmanager
 def _locked_file_patch(file_path: str):
     """Yield (content, writer) under an exclusive file lock."""
     import fcntl
 
-    lock_path = file_path + ".patch_lock"
-    lock_fd = open(lock_path, "w")
+    # Lock next to the patched file when that directory is writable, else in the
+    # temp dir - a read-only installation cannot create a file there, and this
+    # open() runs before we know whether anything needs patching.
+    try:
+        lock_fd = open(file_path + ".patch_lock", "w")
+    except OSError:
+        lock_fd = open(_fallback_lock_path(file_path), "w")
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
 

@@ -35,7 +35,7 @@ from nemo_rl.distributed.virtual_cluster import (
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.utils.routed_experts_codec import decode_routed_experts
 from nemo_rl.utils.timer import Timer
-from nemo_rl.utils.venvs import create_local_venv_on_each_node
+from nemo_rl.utils.venvs import create_local_venv_on_each_node, git_root
 
 # Kept local (not imported from models.generation) so the gym actor stays free of
 # generation-module imports. Must cover every name resolve_routed_experts_dtype
@@ -74,7 +74,16 @@ def get_nemo_gym_uv_cache_dir() -> str | None:
     """
     if not os.environ.get("NRL_CONTAINER"):
         return None
-    return subprocess.check_output(["uv", "cache", "dir"]).decode().strip()
+    # --directory pins uv's project discovery to the NeMo-RL checkout, as
+    # create_local_venv does. Without it uv walks up from the caller's working
+    # directory and adopts whatever pyproject.toml it finds there - including that
+    # project's [tool.uv] required-version, which makes `uv cache dir` exit non-zero
+    # when it disagrees with the uv on PATH.
+    return (
+        subprocess.check_output(["uv", "cache", "dir", "--directory", git_root])
+        .decode()
+        .strip()
+    )
 
 
 def get_nemo_gym_venv_dir() -> str | None:

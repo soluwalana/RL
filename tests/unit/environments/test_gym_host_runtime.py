@@ -126,3 +126,72 @@ def test_run_rollouts_sync_collects():
         helper,
     )
     assert len(results) == 1
+
+
+def test_apply_uv_dirs_sets_config_keys_in_container(monkeypatch):
+    """Gym reads the CONFIG keys, not the env vars - the env alone gets overwritten."""
+    monkeypatch.setenv("NRL_CONTAINER", "1")
+    monkeypatch.setenv("NEMO_GYM_VENV_DIR", "/opt/gym_venvs")
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    monkeypatch.setattr(
+        runtime.subprocess, "check_output", lambda *a, **k: "/opt/uv_cache\n"
+    )
+
+    config: dict = {}
+    runtime._apply_uv_dirs(config)
+
+    assert config[runtime.UV_CACHE_DIR_KEY] == "/opt/uv_cache"
+    assert config[runtime.UV_VENV_DIR_KEY] == "/opt/gym_venvs"
+
+
+def test_apply_uv_dirs_noop_outside_container(monkeypatch):
+    monkeypatch.delenv("NRL_CONTAINER", raising=False)
+    monkeypatch.delenv("NEMO_GYM_VENV_DIR", raising=False)
+
+    config: dict = {}
+    runtime._apply_uv_dirs(config)
+
+    assert config == {}
+
+
+def test_apply_uv_dirs_does_not_override_explicit_config(monkeypatch):
+    monkeypatch.setenv("NRL_CONTAINER", "1")
+    monkeypatch.setenv("NEMO_GYM_VENV_DIR", "/opt/gym_venvs")
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    monkeypatch.setattr(
+        runtime.subprocess, "check_output", lambda *a, **k: "/opt/uv_cache\n"
+    )
+
+    config = {runtime.UV_CACHE_DIR_KEY: "/custom/cache"}
+    runtime._apply_uv_dirs(config)
+
+    assert config[runtime.UV_CACHE_DIR_KEY] == "/custom/cache"
+    assert config[runtime.UV_VENV_DIR_KEY] == "/opt/gym_venvs"
+
+
+def test_uv_cache_dir_prefers_the_configured_env_var(monkeypatch):
+    """`uv cache dir` exits non-zero when the CWD's pyproject pins a conflicting
+    [tool.uv] required-version - true in the nemo-platform image - so an explicit
+    UV_CACHE_DIR must win without shelling out at all."""
+    monkeypatch.setenv("NRL_CONTAINER", "1")
+    monkeypatch.setenv("UV_CACHE_DIR", "/home/ubuntu/.cache/uv")
+
+    def _never(*a, **k):
+        raise AssertionError("uv should not be invoked when UV_CACHE_DIR is set")
+
+    monkeypatch.setattr(runtime.subprocess, "check_output", _never)
+
+    assert runtime._uv_cache_dir() == "/home/ubuntu/.cache/uv"
+
+
+def test_uv_cache_dir_returns_none_when_uv_unavailable(monkeypatch):
+    """No env var and no usable `uv`: let Gym pick its own rather than crash."""
+    monkeypatch.setenv("NRL_CONTAINER", "1")
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("uv")
+
+    monkeypatch.setattr(runtime.subprocess, "check_output", _boom)
+
+    assert runtime._uv_cache_dir() is None

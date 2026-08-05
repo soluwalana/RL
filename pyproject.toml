@@ -106,7 +106,7 @@ dependencies = [
   # build-container runner is aarch64 (uv reports aarch64-unknown-linux-gnu),
   # so the marker must include aarch64 — otherwise mooncake is silently
   # excluded from the resolution during the Docker build.
-  "mooncake-transfer-engine-cuda13==0.3.11.post1 ; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+  "mooncake-transfer-engine-cuda13==0.3.12.post1 ; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
 ]
 
 [project.optional-dependencies]
@@ -430,6 +430,8 @@ constraint-dependencies = [
   "onnx>=1.21.0rc4",          # Address CVE GHSA-hqmj-h5c6-369m
   "cryptography>=48.0.1",     # Address CVE GHSA-6w46-j5rx-g56g, GHSA-537c-gmf6-5ccf
   "orjson>=3.11.6",           # Address CVE GHSA-hx9q-6w63-j58v
+  # Arrives transitively via wandb.
+  "gitpython>=3.1.58",        # Address CVE GHSA-6p8h-3wgx-97gf, GHSA-94p4-4cq8-9g67, GHSA-fjr4-x663-mwxc, GHSA-r9mr-m37c-5fr3
   "pyjwt>=2.13.0",
   "dulwich>=1.2.5",
   "diffusers>=0.38.0",

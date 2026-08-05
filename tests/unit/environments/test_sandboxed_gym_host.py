@@ -373,3 +373,30 @@ def test_collect_gym_host_egress_allows_discovers_and_dedupes():
         ("broker.svc", 51234),
         ("64.181.219.176", 443),
     ]
+
+
+def test_uv_env_passthrough_forwards_only_set_vars(monkeypatch):
+    from nemo_rl.environments.sandbox.host.models import uv_env_passthrough
+
+    monkeypatch.setenv("NRL_CONTAINER", "1")
+    monkeypatch.setenv("NEMO_GYM_VENV_DIR", "/opt/gym_venvs")
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+
+    assert uv_env_passthrough() == {
+        "NRL_CONTAINER": "1",
+        "NEMO_GYM_VENV_DIR": "/opt/gym_venvs",
+    }
+
+
+def test_uv_env_passthrough_carries_no_credentials(monkeypatch):
+    """Whatever it forwards must survive validate_bootstrap_env."""
+    from nemo_rl.environments.sandbox.host.models import (
+        uv_env_passthrough,
+        validate_bootstrap_env,
+    )
+
+    monkeypatch.setenv("NRL_CONTAINER", "1")
+    monkeypatch.setenv("UV_CACHE_DIR", "/opt/uv_cache")
+    monkeypatch.setenv("NEMO_GYM_VENV_DIR", "/opt/gym_venvs")
+
+    validate_bootstrap_env(uv_env_passthrough())
