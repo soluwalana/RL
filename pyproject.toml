@@ -368,6 +368,13 @@ override-dependencies = [
   "llguidance>=1.3.0,<1.4.0",
   # Override setuptools range in other dependencies to address CVE GHSA-58pv-8j8x-9vj2
   "setuptools>=80.10.2",
+  # Override mlflow's cryptography ceiling to address CVE GHSA-g6cj-pr64-35w5 (CVE-2026-69247,
+  # a Bleichenbacher oracle in PKCS#7 EnvelopedData decryption, fixed in 50.0.0). mlflow 3.14.0
+  # requires cryptography<49 and no release through 3.15.1 allows >=50, so this cannot be a
+  # constraint. Safe to force: mlflow-skinny does not depend on cryptography at all, mlflow's cap
+  # is a routine next-major bound, and 50.0.0's only behaviour changes on linux-x86_64 are
+  # stricter DER parsing plus the FFDH deprecation - nothing mlflow exercises.
+  "cryptography>=50.0.0",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@a48493600c4886c1b297aaa78db0e1ebc2d8dd6c ; platform_machine == 'aarch64'",
   # Relax megatron-core workspace member's opentelemetry-api ceiling (<1.34) for protobuf 6.x compat with ray
@@ -420,7 +427,7 @@ constraint-dependencies = [
   "brotli>=1.2.0",            # Address CVE GHSA-2qfp-q593-8484
   "starlette>=0.49.1",        # Address CVE GHSA-7f5h-v6xp-fcq8
   "urllib3>=2.7.0",           # Address CVE GHSA-38jv-5279-wg99
-  "aiohttp>=3.13.3",          # Address CVE GHSA-mqqc-3gqh-h2x8
+  "aiohttp>=3.14.3",          # Address CVE GHSA-mqqc-3gqh-h2x8, GHSA-cq5v-8q36-5273
   "pyasn1>=0.6.3",            # Address CVE GHSA-jr27-m4p2-rc6r
   "wheel>=0.46.2",            # Address CVE GHSA-8rrh-rw8j-w5fx
   "protobuf>=6.33.5",         # Address CVE GHSA-7gcm-g887-7qv7
@@ -428,7 +435,6 @@ constraint-dependencies = [
   "pygments>=2.20.0",         # Address CVE GHSA-5239-wwwm-4pmq
   "cbor2>=5.9.0",             # Address CVE GHSA-3c37-wwvx-h642
   "onnx>=1.21.0rc4",          # Address CVE GHSA-hqmj-h5c6-369m
-  "cryptography>=48.0.1",     # Address CVE GHSA-6w46-j5rx-g56g, GHSA-537c-gmf6-5ccf
   "orjson>=3.11.6",           # Address CVE GHSA-hx9q-6w63-j58v
   # Arrives transitively via wandb.
   "gitpython>=3.1.58",        # Address CVE GHSA-6p8h-3wgx-97gf, GHSA-94p4-4cq8-9g67, GHSA-fjr4-x663-mwxc, GHSA-r9mr-m37c-5fr3
