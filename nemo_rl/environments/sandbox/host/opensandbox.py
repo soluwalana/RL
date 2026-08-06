@@ -73,6 +73,10 @@ class OpenSandboxGymHostProvider:
             self._connection["use_server_proxy"] = True
 
         self._create_options = dict(create) if create else {}
+        # Large training images flake on the SDK's create-time health probe
+        # (httpx.ReadError while get_endpoint races). wait_ready() polls /health
+        # after routes resolve, so skip the SDK probe by default.
+        self._create_options.setdefault("skip_health_check", True)
         self._probe = probe
         self._operations = operations
         self._resource_handles: dict[str, SandboxHandle] = {}

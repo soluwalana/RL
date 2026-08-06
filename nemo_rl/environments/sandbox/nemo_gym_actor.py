@@ -40,6 +40,11 @@ from nemo_rl.environments.nemo_gym import (
 )
 from nemo_rl.environments.sandbox.broker_actor import start_episode_broker
 from nemo_rl.environments.sandbox.config import EpisodeBrokerConfig
+from nemo_rl.environments.sandbox.host.entrypoint import (
+    default_gym_host_entrypoint,
+    gym_uv_cache_dir,
+    gym_uv_venv_dir,
+)
 from nemo_rl.environments.sandbox.host.models import (
     GymHostEgressRule,
     GymHostSpec,
@@ -127,6 +132,9 @@ def build_sandbox_global_config(cfg: SandboxedGymActorConfig) -> dict[str, Any]:
 
     global_config.setdefault("global_aiohttp_connector_limit_per_host", 16_384)
     global_config.setdefault("global_aiohttp_connector_limit", 65_536)
+    # Writable dirs inside the job sandbox (image Gym tree is root-owned).
+    global_config.setdefault("uv_cache_dir", gym_uv_cache_dir())
+    global_config.setdefault("uv_venv_dir", gym_uv_venv_dir())
     return global_config
 
 
@@ -227,7 +235,11 @@ def _gym_host_spec_from_config(
         allow_internet=sandbox.allow_internet,
         public_dns_allow=sandbox.network_policy.public_dns_allow,
         resolver_addresses=sandbox.network_policy.resolver_addresses,
-        entrypoint=tuple(sandbox.entrypoint) if sandbox.entrypoint else None,
+        entrypoint=(
+            tuple(sandbox.entrypoint)
+            if sandbox.entrypoint
+            else tuple(default_gym_host_entrypoint())
+        ),
     )
 
 

@@ -5108,18 +5108,26 @@ def async_grpo_train(
         # Environments must be shut down before generation workers because
         # they may have in-flight HTTP requests to vLLM HTTP endpoints.
         # Killing generation first leaves environments retrying dead connections.
+        # OpenSandbox destroy_host needs longer than typical env shutdown; a short
+        # timeout falls through to ray.kill and leaves BatchSandbox CRs behind.
+        seen_envs: set[int] = set()
         for env_dict in (task_to_env, val_task_to_env):
             if env_dict is None:
                 continue
             for task_name, env in env_dict.items():
+                env_id = id(env)
+                if env_id in seen_envs:
+                    continue
+                seen_envs.add(env_id)
                 print(f"🛑 Shutting down environment {task_name}...")
                 try:
-                    ray.get(env.shutdown.remote(), timeout=10)
-                except Exception:
+                    ray.get(env.shutdown.remote(), timeout=300)
+                except Exception as e:
+                    print(f"Error shutting down environment {task_name}: {e}")
                     try:
                         ray.kill(env)
-                    except Exception as e:
-                        print(f"Error shutting down environment {task_name}: {e}")
+                    except Exception as kill_error:
+                        print(f"Error killing environment {task_name}: {kill_error}")
 
         print("🛑 Shutting down generation workers...")
         try:

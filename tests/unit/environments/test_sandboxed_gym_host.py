@@ -310,6 +310,29 @@ def test_sandbox_global_config_preserves_gym_config():
     ]
     assert global_config["default_host"] == "127.0.0.1"
     assert global_config["port_range_low"] < global_config["port_range_high"]
+    assert global_config["uv_cache_dir"]
+    assert global_config["uv_venv_dir"]
+
+
+def test_gym_host_spec_defaults_real_entrypoint_when_omitted():
+    from nemo_rl.environments.sandbox.host.entrypoint import SANDBOXED_GYM_ACTOR_VENV
+    from nemo_rl.environments.sandbox.nemo_gym_actor import _gym_host_spec_from_config
+
+    cfg = _sandboxed_actor_cfg({})
+    sandboxed = NemoGymSandboxedConfig.model_validate(cfg["sandboxed"])
+    assert sandboxed.sandbox is not None
+    assert sandboxed.sandbox.entrypoint is None
+    spec = _gym_host_spec_from_config(
+        cfg,
+        sandboxed,
+        "http://broker.svc.cluster.local:51234",
+        "token",
+        "broker.svc.cluster.local",
+        51234,
+    )
+    assert spec.entrypoint is not None
+    assert SANDBOXED_GYM_ACTOR_VENV in spec.entrypoint
+    assert any(arg.endswith("gym_host.sh") for arg in spec.entrypoint)
 
 
 def test_gym_host_spec_carries_global_config_in_bootstrap():
