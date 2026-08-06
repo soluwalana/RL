@@ -51,43 +51,10 @@ from nemo_rl.utils.config import (
     parse_hydra_overrides,
     register_omegaconf_resolvers,
 )
+from nemo_rl.utils.config_redact import redact_config_secrets
+from nemo_rl.utils.env_shutdown import shutdown_environments
 from nemo_rl.utils.logger import get_next_experiment_dir, log_container_init_timing
 from nemo_rl.utils.timer import Timer
-
-# Env shutdown must wait for OpenSandbox destroy_host; short timeouts cause
-# ray.kill before sandboxes are deleted and leave BatchSandbox CRs until TTL.
-_ENV_SHUTDOWN_TIMEOUT_S = 300.0
-
-
-_SENSITIVE_CONFIG_KEYS = {
-    "api_key",
-    "broker_token",
-    "password",
-    "secret",
-    "token",
-}
-
-
-def _redact_config_secrets(value: Any) -> Any:
-    """Return a printable config copy with credential values removed."""
-    if isinstance(value, dict):
-        redacted = {}
-        for key, item in value.items():
-            normalized = str(key).lower()
-            if (
-                normalized in _SENSITIVE_CONFIG_KEYS
-                or normalized.endswith("_api_key")
-                or normalized.endswith("_password")
-                or normalized.endswith("_secret")
-            ):
-                redacted[key] = "<redacted>"
-            else:
-                redacted[key] = _redact_config_secrets(item)
-        return redacted
-    if isinstance(value, (list, tuple)):
-        return [_redact_config_secrets(item) for item in value]
-    return value
-
 
 def _shutdown_environments(
     *env_dicts: Optional[dict[str, EnvironmentInterface]],
@@ -272,7 +239,7 @@ The validation set you pass in will directly be used for validation with no addi
 
     # Print config
     print("Final config:")
-    pprint.pprint(_redact_config_secrets(config.model_dump(mode="python")))
+    pprint.pprint(redact_config_secrets(config.model_dump(mode="python")))
 
     with rl_init_timer.time("ray_connect"):
         init_ray()
