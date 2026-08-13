@@ -27,9 +27,11 @@ import os
 import socket
 import subprocess
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 
 GYM_GLOBAL_CONFIG_ENV_KEY = "NMP_GYM_GLOBAL_CONFIG"
+ENVIRONMENT_PATH_ENV_KEY = "NMP_ENVIRONMENT_PATH"
 UV_CACHE_DIR_KEY = "uv_cache_dir"
 UV_VENV_DIR_KEY = "uv_venv_dir"
 # Mirrors DEFAULT_GYM_PORT_RANGE_{LOW,HIGH} in nemo_rl.distributed.virtual_cluster.
@@ -132,6 +134,90 @@ def _apply_uv_dirs(global_config: dict[str, Any]) -> None:
         global_config.setdefault(UV_VENV_DIR_KEY, venv_dir)
 
 
+def _agent_venv_pythons(global_config: dict[str, Any]) -> list[Path]:
+    """Interpreters of the venvs Gym built for each configured agent server.
+
+    Gym lays these out as ``<uv_venv_dir>/<server_type>/<name>/.venv`` (see
+    ``setup_env_command`` in nemo_gym.cli.setup_command), so they are discoverable by glob
+    once ``RunHelper.start`` has returned.
+    """
+    venv_root = global_config.get(UV_VENV_DIR_KEY)
+    if not venv_root:
+        return []
+    return [
+        python
+        for venv in sorted(Path(venv_root).glob("responses_api_agents/*/.venv"))
+        if (python := venv / "bin" / "python").is_file()
+    ]
+
+
+def _wheel_requirement(wheel: Path) -> str:
+    """``name==version`` for a wheel, parsed from its PEP 427 filename.
+
+    Requirements rather than wheel paths: ``uv pip install <path>.whl`` uninstalls and
+    reinstalls the package even when that exact version is already present, so passing paths
+    would rebuild the whole dependency tree of every agent venv on each spin-up. Names resolve
+    against ``--find-links`` and leave already-satisfied packages alone.
+    """
+    # {distribution}-{version}(-{build})?-{python}-{abi}-{platform}.whl, and a distribution
+    # never contains "-" (it is escaped to "_"), so the first two fields are unambiguous.
+    parts = wheel.name.split("-")
+    if len(parts) < 5:
+        raise ValueError(f"Not a PEP 427 wheel filename: {wheel.name}")
+    return f"{parts[0]}=={parts[1]}"
+
+
+def install_environment_wheels(global_config: dict[str, Any]) -> None:
+    """Install the environment package's vendored wheels into each agent venv.
+
+    An environment FileSet ships its own dependency closure under ``wheels/``. Gym builds each
+    server venv from that server's ``requirements.txt``, which carries the framework only, so
+    the environment package is installed here instead -- offline, from the read-only mount,
+    with no package index involved. That keeps spin-up working on a sandbox whose egress does
+    not reach the index the environment was published to.
+
+    Safe to run after ``RunHelper.start``: ``verifiers_agent`` resolves its environment lazily
+    on the first rollout (``_get_env`` in its ``app.py``), so the packages only need to be
+    importable before the first ``POST /rollouts/run``, not at spin-up.
+
+    Failures raise, including finding no agent venv to install into. A missing environment
+    package surfaces at the first rollout as an opaque ``load_environment`` error, long after
+    the cause.
+    """
+    env_root = os.environ.get(ENVIRONMENT_PATH_ENV_KEY, "").strip()
+    if not env_root:
+        return
+    wheels_dir = Path(env_root) / "wheels"
+    wheels = sorted(wheels_dir.glob("*.whl")) if wheels_dir.is_dir() else []
+    if not wheels:
+        # native-v1 packages and bundled config_paths runs carry no wheels; both are valid.
+        print(f"gym-host: no wheels under {wheels_dir}, nothing to install")
+        return
+
+    requirements = [_wheel_requirement(wheel) for wheel in wheels]
+    pythons = _agent_venv_pythons(global_config)
+    if not pythons:
+        raise RuntimeError(
+            f"{len(wheels)} environment wheel(s) under {wheels_dir}, but Gym built no agent venv "
+            f"under {global_config.get(UV_VENV_DIR_KEY)!r}. Installing nothing would leave the "
+            "environment package missing until the first rollout fails to import it."
+        )
+
+    for python in pythons:
+        cmd = [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--no-index",
+            f"--find-links={wheels_dir}",
+            *requirements,
+        ]
+        print(f"gym-host: installing {len(requirements)} environment package(s) into {python}")
+        subprocess.run(cmd, check=True)
+
+
 def bootstrap_gym_host() -> tuple[Any, Any, Any]:
     """Start Gym servers and return (RunHelper, head_server_config, RolloutCollectionHelper)."""
     from nemo_gym.cli.env import RunHelper
@@ -151,6 +237,7 @@ def bootstrap_gym_host() -> tuple[Any, Any, Any]:
             skip_load_from_dotenv=True,
         )
     )
+    install_environment_wheels(global_config)
     head_server_config = BaseServerConfig(host="127.0.0.1", port=head_port)
     rollout_helper = _create_rollout_helper()
     return run_helper, head_server_config, rollout_helper
