@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import threading
 from http.server import HTTPServer
 from pathlib import Path
@@ -252,7 +253,7 @@ def test_install_environment_wheels_raises_when_no_agent_venv_exists(tmp_path, m
     monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, str(env_root))
     monkeypatch.setattr(runtime.subprocess, "run", lambda *a, **k: None)
 
-    with pytest.raises(RuntimeError, match="no agent venv"):
+    with pytest.raises(RuntimeError, match="no server\\s*venv"):
         runtime.install_environment_wheels({runtime.UV_VENV_DIR_KEY: str(tmp_path / "empty")})
 
 
@@ -298,7 +299,7 @@ def test_install_environment_wheels_noop_without_environment_path(monkeypatch):
     runtime.install_environment_wheels({})
 
 
-def test_agent_venv_pythons_skips_incomplete_venvs(tmp_path):
+def test_env_package_venv_pythons_skips_incomplete_venvs(tmp_path):
     """A venv dir without an interpreter is half-built; installing into it would fail."""
     venv_root = tmp_path / "gym_venvs"
     good = _make_agent_venv(venv_root, "verifiers_agent")
@@ -307,4 +308,101 @@ def test_agent_venv_pythons_skips_incomplete_venvs(tmp_path):
     (venv_root / "responses_api_models" / "vllm_model" / ".venv" / "bin").mkdir(parents=True)
     (venv_root / "responses_api_models" / "vllm_model" / ".venv" / "bin" / "python").touch()
 
-    assert runtime._agent_venv_pythons({runtime.UV_VENV_DIR_KEY: str(venv_root)}) == [good]
+    assert runtime._env_package_venv_pythons(str(venv_root)) == [good]
+
+
+def test_register_environment_search_root_prepends_the_mount(tmp_path, monkeypatch):
+    """native-v1 server dirs are resolved by NAME, so the mount must be a search root.
+
+    Prepended, not appended: extra roots win on a name collision, which is what lets a
+    user's environment shadow a built-in of the same name.
+    """
+    monkeypatch.setenv(runtime.NEMO_GYM_EXTRA_ROOTS_ENV_KEY, "/opt/plugins")
+    monkeypatch.delenv(runtime.ENVIRONMENT_PATH_ENV_KEY, raising=False)
+
+    result = runtime.register_environment_search_root(str(tmp_path / "environment"))
+
+    assert result.split(os.pathsep) == [str(tmp_path / "environment"), "/opt/plugins"]
+    assert os.environ[runtime.NEMO_GYM_EXTRA_ROOTS_ENV_KEY] == result
+
+
+def test_register_environment_search_root_falls_back_to_the_env_var(tmp_path, monkeypatch):
+    """The sandboxed host passes no argument; it reads the bootstrap env var."""
+    monkeypatch.delenv(runtime.NEMO_GYM_EXTRA_ROOTS_ENV_KEY, raising=False)
+    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, str(tmp_path / "environment"))
+
+    assert runtime.register_environment_search_root() == str(tmp_path / "environment")
+
+
+def test_register_environment_search_root_is_idempotent(tmp_path, monkeypatch):
+    """Re-registering must not grow the path; a duplicated root is still one root."""
+    root = str(tmp_path / "environment")
+    monkeypatch.delenv(runtime.NEMO_GYM_EXTRA_ROOTS_ENV_KEY, raising=False)
+    monkeypatch.delenv(runtime.ENVIRONMENT_PATH_ENV_KEY, raising=False)
+
+    runtime.register_environment_search_root(root)
+    assert runtime.register_environment_search_root(root) == root
+
+
+def test_register_environment_search_root_noop_without_a_package(monkeypatch):
+    """Standalone NeMo-RL and bundled config_paths runs have no FileSet to register."""
+    monkeypatch.delenv(runtime.ENVIRONMENT_PATH_ENV_KEY, raising=False)
+    monkeypatch.delenv(runtime.NEMO_GYM_EXTRA_ROOTS_ENV_KEY, raising=False)
+
+    assert runtime.register_environment_search_root() is None
+    assert runtime.NEMO_GYM_EXTRA_ROOTS_ENV_KEY not in os.environ
+
+
+def test_install_environment_wheels_accepts_an_explicit_root(tmp_path, monkeypatch):
+    """Colocated runs pass the path from config; no NMP_ENVIRONMENT_PATH is set there."""
+    env_root = tmp_path / "environment"
+    wheels = env_root / "wheels"
+    wheels.mkdir(parents=True)
+    (wheels / "ascii_tree-0.1.0-py3-none-any.whl").touch()
+
+    venv_root = tmp_path / "gym_venvs"
+    python = _make_agent_venv(venv_root, "verifiers_agent")
+
+    monkeypatch.delenv(runtime.ENVIRONMENT_PATH_ENV_KEY, raising=False)
+    calls = []
+    monkeypatch.setattr(runtime.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+
+    runtime.install_environment_wheels(
+        {runtime.UV_VENV_DIR_KEY: str(venv_root)}, str(env_root)
+    )
+
+    assert len(calls) == 1
+    assert str(python) in calls[0]
+    assert "ascii_tree==0.1.0" in calls[0]
+
+
+def test_env_package_venv_pythons_includes_resources_servers(tmp_path):
+    """wheels-v1 declares no adapter, so its code may be a verifier, not an agent."""
+    venv_root = tmp_path / "gym_venvs"
+    agent = _make_agent_venv(venv_root, "verifiers_agent")
+    verifier = venv_root / "resources_servers" / "my_env" / ".venv" / "bin" / "python"
+    verifier.parent.mkdir(parents=True)
+    verifier.touch()
+
+    assert runtime._env_package_venv_pythons(str(venv_root)) == [agent, verifier]
+
+
+def test_install_environment_wheels_warns_without_a_venv_root(tmp_path, monkeypatch, capsys):
+    """No NEMO_GYM_VENV_DIR is the documented non-container default, not an error.
+
+    Gym then puts venvs at <server_dir>/.venv, which is not discoverable from here.
+    Raising would break runs that work today, so this warns and skips.
+    """
+    env_root = tmp_path / "environment"
+    wheels = env_root / "wheels"
+    wheels.mkdir(parents=True)
+    (wheels / "ascii_tree-0.1.0-py3-none-any.whl").touch()
+    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, str(env_root))
+
+    def _never(*a, **k):
+        raise AssertionError("nothing can be installed without a known venv root")
+
+    monkeypatch.setattr(runtime.subprocess, "run", _never)
+    runtime.install_environment_wheels({})
+
+    assert "WARNING" in capsys.readouterr().out

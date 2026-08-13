@@ -97,6 +97,123 @@ def get_nemo_gym_venv_dir() -> str | None:
     return os.environ.get("NEMO_GYM_VENV_DIR")
 
 
+# Gym's own component search-path variable (nemo_gym.component_search_roots).
+NEMO_GYM_EXTRA_ROOTS_ENV_VAR = "NEMO_GYM_EXTRA_ROOTS"
+# Server types that run user environment code. Model servers are excluded: they proxy
+# to vLLM and never import the environment package.
+ENV_PACKAGE_SERVER_TYPES = ("responses_api_agents", "resources_servers")
+
+
+def register_environment_search_root(env_root: str | None) -> str | None:
+    """Put an environment FileSet on Gym's component search path.
+
+    A ``native-v1`` package ships its own Gym server tree (``resources_servers/<name>/``
+    with ``app.py`` and ``requirements.txt``). Gym resolves a server directory by NAME
+    against ``component_search_roots()`` -- extra roots, then sys.path, cwd, and the Gym
+    install root. A staged FileSet is on none of those, so without this the package is
+    staged and silently ignored.
+
+    Prepended rather than appended, because extra roots win on a name collision -- which
+    is what lets a user's environment shadow a built-in of the same name.
+
+    Must run BEFORE ``RunHelper.start``, which is when server directories are resolved.
+    Gym reads the variable at call time and ``run_command`` copies the environment into
+    every server subprocess, so setting it here reaches them too.
+    """
+    root = (env_root or "").strip()
+    if not root:
+        return None
+    existing = os.environ.get(NEMO_GYM_EXTRA_ROOTS_ENV_VAR, "")
+    entries = [root, *(e for e in existing.split(os.pathsep) if e and e != root)]
+    joined = os.pathsep.join(entries)
+    os.environ[NEMO_GYM_EXTRA_ROOTS_ENV_VAR] = joined
+    print(f"NeMo Gym: environment search root -> {root}")
+    return joined
+
+
+def _wheel_requirement(wheel: Path) -> str:
+    """``name==version`` for a wheel, parsed from its PEP 427 filename.
+
+    Requirements rather than wheel paths: ``uv pip install <path>.whl`` uninstalls and
+    reinstalls the package even when that exact version is already present.
+    """
+    parts = wheel.name.split("-")
+    if len(parts) < 5:
+        raise ValueError(f"Not a PEP 427 wheel filename: {wheel.name}")
+    return f"{parts[0]}=={parts[1]}"
+
+
+def _env_package_venv_pythons(venv_root: str) -> list[Path]:
+    """Interpreters of the venvs Gym built for servers that run environment code."""
+    return [
+        python
+        for server_type in ENV_PACKAGE_SERVER_TYPES
+        for venv in sorted(Path(venv_root).glob(f"{server_type}/*/.venv"))
+        if (python := venv / "bin" / "python").is_file()
+    ]
+
+
+def install_environment_wheels(
+    global_config: Dict[str, Any], env_root: str | None
+) -> None:
+    """Install a ``wheels-v1`` / ``adapter-wheels-v1`` closure into the server venvs.
+
+    The package ships its own dependency closure under ``wheels/``. Gym builds each
+    server venv from that server's own requirements, which carry the framework only, so
+    the environment package is installed here -- offline, from the staged directory, with
+    no package index involved.
+
+    Run AFTER ``RunHelper.start``: the per-server venvs do not exist until it returns.
+    Safe because the agent resolves its environment lazily, on the first rollout.
+    """
+    root = (env_root or "").strip()
+    if not root:
+        return
+    wheels_dir = Path(root) / "wheels"
+    wheels = sorted(wheels_dir.glob("*.whl")) if wheels_dir.is_dir() else []
+    if not wheels:
+        # native-v1 packages and bundled config_paths runs carry no wheels; both valid.
+        return
+
+    venv_root = global_config.get("uv_venv_dir")
+    if not venv_root:
+        # Gym puts venvs at <server_dir>/.venv when NEMO_GYM_VENV_DIR is unset, which we
+        # cannot locate from here. Warn rather than raise: this is the documented
+        # non-container default, and failing would break runs that work today.
+        print(
+            f"NeMo Gym: WARNING {len(wheels)} environment wheel(s) under {wheels_dir} were "
+            "not installed because no uv_venv_dir is configured. Set NEMO_GYM_VENV_DIR so "
+            "the environment package can be installed into the server venvs."
+        )
+        return
+
+    pythons = _env_package_venv_pythons(venv_root)
+    if not pythons:
+        raise RuntimeError(
+            f"{len(wheels)} environment wheel(s) under {wheels_dir}, but Gym built no "
+            f"server venv under {venv_root!r} for any of {ENV_PACKAGE_SERVER_TYPES}. "
+            "Installing nothing would leave the environment package missing until the "
+            "first rollout fails to import it."
+        )
+
+    requirements = [_wheel_requirement(wheel) for wheel in wheels]
+    for python in pythons:
+        print(f"NeMo Gym: installing {len(requirements)} environment package(s) into {python}")
+        subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--no-index",
+                f"--find-links={wheels_dir}",
+                *requirements,
+            ],
+            check=True,
+        )
+
+
 class NemoGymConfig(TypedDict):
     model_name: str
     base_urls: List[str]
@@ -121,6 +238,11 @@ class NemoGymConfig(TypedDict):
     # Forwarded from policy.tokenizer.use_fastokens so rollout actors patch their
     # tokenizer consistently with the driver. Defaults to off when absent.
     use_fastokens: NotRequired[bool]
+    # Staging directory of a platform environment FileSet, when one was supplied.
+    # Colocated runs need it for the same two reasons the sandboxed host does: it is
+    # Gym's search root for native-v1 server trees, and the source of the vendored
+    # wheels for wheels-v1 / adapter-wheels-v1. Absent for standalone NeMo-RL.
+    environment_path: NotRequired[str | None]
 
 
 def _detect_invalid_tool_call_and_malformed_thinking(
@@ -268,6 +390,16 @@ Depending on your data shape, you may want to change these values."""
             "port": self.head_server_port,
         }
 
+        # A platform environment FileSet reaches Gym the same way here as in the
+        # sandboxed host: as a search root for native-v1 server trees, and as a wheel
+        # closure for wheels-v1 / adapter-wheels-v1. Both are no-ops without one.
+        # Deliberately NOT imported from nemo_rl.environments.sandbox: that package's
+        # __init__ eagerly pulls in fastapi and nemo_gym.sandbox.broker, neither of which
+        # the colocated venv is guaranteed to have.
+        environment_path = self.cfg.get("environment_path")
+        # Before start(): this is when Gym resolves each server directory by name.
+        register_environment_search_root(environment_path)
+
         self.rh = RunHelper()
         self.rh.start(
             global_config_dict_parser_config=GlobalConfigDictParserConfig(
@@ -277,6 +409,8 @@ Depending on your data shape, you may want to change these values."""
                 skip_load_from_cli=True,
             )
         )
+        # After start(): the per-server venvs do not exist until it returns.
+        install_environment_wheels(initial_global_config_dict, environment_path)
 
         # Setup for rollout collection
         self.head_server_config = BaseServerConfig(
@@ -736,6 +870,7 @@ def spinup_nemo_gym_actor(
         routed_experts_dtype=routed_experts_dtype,
         use_fastokens=use_fastokens,
         initial_global_config_dict=nemo_gym_dict,
+        environment_path=environment_path,
     )
 
     nemo_gym_py_exec = get_actor_python_env("nemo_rl.environments.nemo_gym.NemoGym")
