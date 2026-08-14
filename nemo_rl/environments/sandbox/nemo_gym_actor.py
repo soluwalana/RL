@@ -387,10 +387,8 @@ class SandboxedGymActor(EnvironmentInterface):
         timer = Timer()
         counts_left = Counter(row["agent_ref"]["name"] for row in nemo_gym_examples)
 
-        # A rollout batch is one blocking POST that can run for many minutes, and neither
-        # side logs during it: the runtime silences its HTTP handler and both Gym servers
-        # filter 200s. Without these two lines a healthy run is indistinguishable from a
-        # hung one from the training log.
+        # A rollout batch is one blocking POST that can run for many minutes and is
+        # otherwise unlogged on both sides, so a healthy run looks like a hung one.
         LOGGER.info(
             "rollout batch: POST %d example(s) -> %s",
             len(nemo_gym_examples),

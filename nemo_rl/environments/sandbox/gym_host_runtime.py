@@ -269,9 +269,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        # The only signal this process emits during a rollout. log_message is silenced to
-        # keep health polls out of the log, and both Gym servers filter their own 200s, so
-        # without this the sandbox log is empty from spin-up until something fails.
+        # The only signal this process emits during a rollout: log_message is silenced
+        # and both Gym servers filter their own 200s.
         print(f"gym-host: rollouts/run <- {len(examples)} example(s)", flush=True)
         started = time.monotonic()
         try:

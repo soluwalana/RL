@@ -221,9 +221,11 @@ def test_install_environment_wheels_installs_offline_into_server_venvs(
     assert f"--find-links={env_root / 'wheels'}" in cmd
     # Names, not paths: `uv pip install <path>.whl` uninstalls and reinstalls even when that
     # exact version is already present, which would rebuild the venv on every spin-up.
-    assert "ascii_tree==0.1.0" in cmd
-    assert "verifiers==0.1.14" in cmd
+    assert "ascii-tree" in cmd
+    assert "verifiers" in cmd
     assert not any(c.endswith(".whl") for c in cmd)
+    # Never pinned: a pin overwrites what the server already resolved and imported.
+    assert not any("==" in c for c in cmd)
 
 
 def test_install_environment_wheels_installs_into_every_env_code_venv(
@@ -321,19 +323,16 @@ def test_install_environment_wheels_noop_without_environment_path(
 # --------------------------------------------------------------------------------------
 
 
-def test_wheelhouse_requirements_pins_unambiguous_distributions():
-    """One version in the pool means we can be exact, which is also a no-op if installed."""
+def test_wheelhouse_requirements_never_pins():
+    """Pinning rewrites packages the server already resolved -- and already imported."""
     wheels = [
         Path("ascii_tree-0.1.5-py3-none-any.whl"),
         Path("verifiers-0.1.14-py3-none-any.whl"),
     ]
-    assert pkg.wheelhouse_requirements(wheels) == [
-        "ascii_tree==0.1.5",
-        "verifiers==0.1.14",
-    ]
+    assert pkg.wheelhouse_requirements(wheels) == ["ascii-tree", "verifiers"]
 
 
-def test_wheelhouse_requirements_unpins_duplicated_distributions(capsys):
+def test_wheelhouse_requirements_collapses_duplicated_distributions():
     """Two versions of one project must not become two contradictory pins.
 
     A wheelhouse is a candidate pool, not a lock file; pinning every file turns a
@@ -346,11 +345,10 @@ def test_wheelhouse_requirements_unpins_duplicated_distributions(capsys):
         Path("xxhash-4.0.0-cp313-cp313-manylinux_2_17_x86_64.whl"),
     ]
 
-    assert pkg.wheelhouse_requirements(wheels) == ["ascii_tree==0.1.5", "xxhash"]
+    assert pkg.wheelhouse_requirements(wheels) == ["ascii-tree", "xxhash"]
 
-    warning = capsys.readouterr().out
-    assert "2 versions of xxhash" in warning
-    assert "3.8.1" in warning and "4.0.0" in warning
+    # One requirement per project, never two pins for the same one.
+    assert len(pkg.wheelhouse_requirements(wheels)) == 2
 
 
 def test_wheelhouse_requirements_falls_back_to_the_normalized_name():
@@ -404,10 +402,9 @@ def test_install_environment_wheels_survives_a_duplicated_distribution(
     pkg.install_environment_wheels({pkg.UV_VENV_DIR_KEY: str(venv_root)}, str(env_root))
 
     (cmd,) = calls
-    assert "ascii_tree==0.1.5" in cmd
+    assert "ascii-tree" in cmd
     assert "xxhash" in cmd
-    assert "xxhash==3.8.1" not in cmd
-    assert "xxhash==4.0.0" not in cmd
+    assert not any(c.startswith("xxhash==") for c in cmd)
 
 
 def test_install_environment_wheels_surfaces_the_resolver_error(tmp_path, monkeypatch):
@@ -439,3 +436,60 @@ def test_install_environment_wheels_surfaces_the_resolver_error(tmp_path, monkey
     message = str(excinfo.value)
     assert "openai-agents==0.20.0 depends on openai" in message
     assert "rebuild it rather than relaxing the install" in message
+
+
+def test_replaced_distributions_reads_the_uv_summary():
+    """uv reports a swap as `- name==old` / `+ name==new`; only removals are dangerous."""
+    summary = (
+        "Resolved 99 packages in 24ms\n"
+        " - protobuf==6.33.6\n"
+        " + protobuf==7.35.1\n"
+        " + ascii-tree==0.1.5\n"
+    )
+    assert pkg.replaced_distributions(summary) == ["protobuf"]
+
+
+def test_install_warns_when_it_replaces_a_live_package(tmp_path, monkeypatch, capsys):
+    """The servers are already running, so a replacement fails later, not here.
+
+    Real case: forcing protobuf 6.33.6 -> 7.35.1 under a live uvicorn produced
+    `VersionError: gencode 7.35.1 runtime 6.33.6` on the first POST /run, with nothing
+    tying it back to this install.
+    """
+    env_root = _make_package(tmp_path / "environment")
+    venv_root = tmp_path / "gym_venvs"
+    _make_server_venv(venv_root, "responses_api_agents", "verifiers_agent")
+
+    monkeypatch.setattr(
+        pkg.subprocess,
+        "run",
+        lambda cmd, **kw: SimpleNamespace(
+            returncode=0, stderr=" - protobuf==6.33.6\n + protobuf==7.35.1\n"
+        ),
+    )
+
+    pkg.install_environment_wheels({pkg.UV_VENV_DIR_KEY: str(venv_root)}, str(env_root))
+
+    out = capsys.readouterr().out
+    assert "replaced 1 package(s)" in out
+    assert "protobuf" in out
+    assert "may fail at the first rollout" in out
+
+
+def test_install_is_quiet_when_nothing_is_replaced(tmp_path, monkeypatch, capsys):
+    """The expected path: unpinned requirements only add what is missing."""
+    env_root = _make_package(tmp_path / "environment")
+    venv_root = tmp_path / "gym_venvs"
+    _make_server_venv(venv_root, "responses_api_agents", "verifiers_agent")
+
+    monkeypatch.setattr(
+        pkg.subprocess,
+        "run",
+        lambda cmd, **kw: SimpleNamespace(
+            returncode=0, stderr=" + ascii-tree==0.1.5\n"
+        ),
+    )
+
+    pkg.install_environment_wheels({pkg.UV_VENV_DIR_KEY: str(venv_root)}, str(env_root))
+
+    assert "WARNING replaced" not in capsys.readouterr().out

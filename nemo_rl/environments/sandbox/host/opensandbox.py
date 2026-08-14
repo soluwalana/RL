@@ -170,16 +170,10 @@ class OpenSandboxGymHostProvider:
         The SDK returns a bare ``host:port/path`` authority, which ``urlopen``
         rejects outright, so the connection protocol has to be reattached here.
 
-        Defaults to ``https``; a deployment whose OpenSandbox server speaks plain HTTP --
-        which is what NeMo-Gym's own shipped provider config assumes (``protocol: http``
-        in ``nemo_gym/sandbox/providers/opensandbox/configs/opensandbox.yaml``) -- must
-        set ``host_provider_options.connection.protocol``. That same key also reaches the
-        SDK connection used by ``create_host``, so the two can never disagree.
-
-        Worth knowing how a mismatch presents, because it is not obvious: an HTTP server
-        accepts the TCP connection and then never answers the TLS handshake, so each
-        health poll burns its full timeout and the job dies only after
-        ``ready_timeout_s`` with a bare ``<urlopen error timed out>``.
+        Defaults to ``https``. A deployment whose OpenSandbox server speaks plain HTTP sets
+        ``host_provider_options.connection.protocol``, which also reaches the SDK connection
+        used by ``create_host`` so the two cannot disagree. A mismatch presents as a health
+        poll that times out rather than a connection error.
         """
         if "://" in endpoint:
             return endpoint
@@ -200,9 +194,8 @@ class OpenSandboxGymHostProvider:
             await provider.close(resource_handle)
             raise
         self._resource_handles[resource_handle.sandbox_id] = resource_handle
-        # The resolved URLs are the one thing you cannot reconstruct from outside: they
-        # come back from the SDK, carry the scheme this provider chose, and every
-        # connectivity failure downstream presents only as a timeout against them.
+        # The resolved URLs cannot be reconstructed from outside, and every downstream
+        # connectivity failure presents only as a timeout against them.
         LOGGER.info(
             "gym host %s ready to probe: health=%s rollouts=%s",
             resource_handle.sandbox_id,
@@ -236,9 +229,8 @@ class OpenSandboxGymHostProvider:
             await asyncio.sleep(_HEALTH_POLL_S)
         raise TimeoutError(
             f"job host {handle.host_id} did not become ready within {timeout_s:g}s "
-            # The URL, not just the host id: a scheme or port mismatch against the
-            # OpenSandbox proxy is indistinguishable from a slow sandbox without it, and
-            # both present as a bare connection timeout after the full deadline.
+            # The URL, not just the host id: a scheme or port mismatch is otherwise
+            # indistinguishable from a slow sandbox.
             f"polling {handle.health_url}"
             + (f": {last_error}" if last_error is not None else "")
         )
