@@ -29,6 +29,7 @@ import json
 import os
 import socket
 import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -268,6 +269,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        # The only signal this process emits during a rollout. log_message is silenced to
+        # keep health polls out of the log, and both Gym servers filter their own 200s, so
+        # without this the sandbox log is empty from spin-up until something fails.
+        print(f"gym-host: rollouts/run <- {len(examples)} example(s)", flush=True)
+        started = time.monotonic()
         try:
             results = run_rollouts_sync(examples, _HEAD_SERVER_CONFIG, _ROLLOUT_HELPER)
         except Exception as exc:
@@ -277,6 +283,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        print(
+            f"gym-host: rollouts/run -> {len(results)} result(s) in "
+            f"{time.monotonic() - started:.1f}s",
+            flush=True,
+        )
         envelope = {
             "results": results,
             "job_id": os.environ.get("NMP_JOB_ID", ""),
