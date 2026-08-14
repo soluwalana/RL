@@ -200,6 +200,15 @@ class OpenSandboxGymHostProvider:
             await provider.close(resource_handle)
             raise
         self._resource_handles[resource_handle.sandbox_id] = resource_handle
+        # The resolved URLs are the one thing you cannot reconstruct from outside: they
+        # come back from the SDK, carry the scheme this provider chose, and every
+        # connectivity failure downstream presents only as a timeout against them.
+        LOGGER.info(
+            "gym host %s ready to probe: health=%s rollouts=%s",
+            resource_handle.sandbox_id,
+            routes.health_url,
+            routes.rollout_url,
+        )
         return GymHostHandle(
             host_id=resource_handle.sandbox_id,
             health_url=routes.health_url,

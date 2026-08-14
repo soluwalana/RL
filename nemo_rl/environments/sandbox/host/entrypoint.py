@@ -49,9 +49,7 @@ DEFAULT_GYM_UV_VENV_DIR = "/opt/gym_venvs"
 DEFAULT_GYM_WRITABLE_SRC = "/tmp/gym-src/Gym"
 
 _GYM_HOST_SCRIPT_NAME = "gym_host.sh"
-_GYM_HOST_SCRIPT_RELPATH = (
-    f"nemo_rl/environments/sandbox/host/{_GYM_HOST_SCRIPT_NAME}"
-)
+_GYM_HOST_SCRIPT_RELPATH = f"nemo_rl/environments/sandbox/host/{_GYM_HOST_SCRIPT_NAME}"
 
 
 def gym_uv_cache_dir() -> str:
