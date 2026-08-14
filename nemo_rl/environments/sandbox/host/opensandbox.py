@@ -169,6 +169,17 @@ class OpenSandboxGymHostProvider:
 
         The SDK returns a bare ``host:port/path`` authority, which ``urlopen``
         rejects outright, so the connection protocol has to be reattached here.
+
+        Defaults to ``https``; a deployment whose OpenSandbox server speaks plain HTTP --
+        which is what NeMo-Gym's own shipped provider config assumes (``protocol: http``
+        in ``nemo_gym/sandbox/providers/opensandbox/configs/opensandbox.yaml``) -- must
+        set ``host_provider_options.connection.protocol``. That same key also reaches the
+        SDK connection used by ``create_host``, so the two can never disagree.
+
+        Worth knowing how a mismatch presents, because it is not obvious: an HTTP server
+        accepts the TCP connection and then never answers the TLS handshake, so each
+        health poll burns its full timeout and the job dies only after
+        ``ready_timeout_s`` with a bare ``<urlopen error timed out>``.
         """
         if "://" in endpoint:
             return endpoint
@@ -215,7 +226,11 @@ class OpenSandboxGymHostProvider:
                 last_error = exc
             await asyncio.sleep(_HEALTH_POLL_S)
         raise TimeoutError(
-            f"job host {handle.host_id} did not become ready within {timeout_s:g}s"
+            f"job host {handle.host_id} did not become ready within {timeout_s:g}s "
+            # The URL, not just the host id: a scheme or port mismatch against the
+            # OpenSandbox proxy is indistinguishable from a slow sandbox without it, and
+            # both present as a bare connection timeout after the full deadline.
+            f"polling {handle.health_url}"
             + (f": {last_error}" if last_error is not None else "")
         )
 
