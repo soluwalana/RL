@@ -211,15 +211,8 @@ class NemoGym(EnvironmentInterface):
         _gym_port_high = self.cfg.get("port_range_high", DEFAULT_GYM_PORT_RANGE_HIGH)
         self.head_server_port = _get_free_port_local(_gym_port_low, _gym_port_high)
 
-        # A platform environment package reaches Gym the same way here as in the sandboxed
-        # host: as a search root for native-v1 server trees, and as a wheel closure for
-        # wheels-v1 / adapter-wheels-v1. Both are no-ops without one.
-        #
-        # Registered BEFORE nemo_gym is imported, not just before RunHelper.start: Gym's
-        # _augment_sys_path() runs at import time and folds the extra roots into sys.path,
-        # so a root registered after the import never reaches this process's import path.
-        # Server-directory resolution re-reads the variable at call time and would tolerate
-        # the later call; module imports out of a native-v1 tree would not.
+        # Registered before nemo_gym is imported, not just before RunHelper.start:
+        # _augment_sys_path() folds the extra roots into sys.path at import time.
         environment_path = self.cfg.get("environment_path")
         register_environment_search_root(environment_path)
 
