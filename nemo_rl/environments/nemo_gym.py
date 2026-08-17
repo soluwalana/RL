@@ -33,7 +33,9 @@ from nemo_rl.distributed.virtual_cluster import (
     _get_node_ip_local,
 )
 from nemo_rl.environments.gym_env_package import (
+    configure_environment_wheelhouse,
     install_environment_wheels,
+    isolate_uv_from_ambient_project,
     register_environment_search_root,
 )
 from nemo_rl.environments.interfaces import EnvironmentInterface
@@ -215,6 +217,11 @@ class NemoGym(EnvironmentInterface):
         # _augment_sys_path() folds the extra roots into sys.path at import time.
         environment_path = self.cfg.get("environment_path")
         register_environment_search_root(environment_path)
+        # Before start(): Gym composes the per-server install itself, so uv's environment
+        # is the only way the wheelhouse reaches it, and the only way to keep the platform
+        # workspace at WORKDIR from imposing its pins on the environment's venvs.
+        isolate_uv_from_ambient_project()
+        configure_environment_wheelhouse(environment_path)
 
         from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
         from nemo_gym.rollout_collection import RolloutCollectionHelper

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
 import threading
 from http.server import HTTPServer
@@ -23,11 +24,26 @@ from nemo_rl.environments.sandbox import gym_host_runtime as runtime
 
 
 class _FakeRolloutHelper:
+    """Stands in for ``RolloutCollectionHelper``, including its completion ordering.
+
+    The real ``run_examples`` returns ``tqdm.asyncio.tqdm.as_completed``, so rows come
+    back in the order they finish. Modelling that here is what keeps a fake from
+    certifying a pairing that only works when nothing overtakes anything else.
+    """
+
+    def __init__(self, latency_by_rowidx: dict | None = None):
+        self.latency_by_rowidx = latency_by_rowidx or {}
+
     def run_examples(self, examples, head_server_config=None):
         async def _one(row):
-            return row, {"response": {"output": []}, "reward": 0.0}
+            await asyncio.sleep(self.latency_by_rowidx.get(row.get("_rowidx"), 0))
+            return row, {
+                "response": {"output": []},
+                "reward": 0.0,
+                "answered_rowidx": row.get("_rowidx"),
+            }
 
-        return [_one(row) for row in examples]
+        return asyncio.as_completed([_one(row) for row in examples])
 
 
 @pytest.fixture
@@ -84,7 +100,9 @@ def test_health_ready(ready_server):
 def test_rollouts_run_returns_results(ready_server):
     import urllib.request
 
-    payload = json.dumps({"examples": [{"agent_ref": {"name": "a"}, "id": 1}]}).encode()
+    payload = json.dumps(
+        {"examples": [{"agent_ref": {"name": "a"}, "id": 1, "_rowidx": 0}]}
+    ).encode()
     req = urllib.request.Request(
         f"{ready_server}/rollouts/run",
         data=payload,
@@ -94,7 +112,9 @@ def test_rollouts_run_returns_results(ready_server):
     with urllib.request.urlopen(req, timeout=10) as resp:
         body = json.loads(resp.read().decode())
     assert len(body["results"]) == 1
-    assert body["results"][0]["reward"] == 0.0
+    rowidx, result = body["results"][0]
+    assert rowidx == 0
+    assert result["reward"] == 0.0
 
 
 def test_rollouts_run_rejects_oversize_request(ready_server):
@@ -121,11 +141,96 @@ def test_rollouts_run_rejects_oversize_request(ready_server):
 def test_run_rollouts_sync_collects():
     helper = _FakeRolloutHelper()
     results = runtime.run_rollouts_sync(
-        [{"agent_ref": {"name": "x"}}],
+        [{"agent_ref": {"name": "x"}, "_rowidx": 0}],
         MagicMock(),
         helper,
     )
     assert len(results) == 1
+
+
+def test_run_rollouts_sync_tags_results_with_their_own_rowidx():
+    """Results must carry the row they were produced for, not their arrival position.
+
+    Gym completes rows out of order, so an untagged list pairs a prompt with whichever
+    result happened to finish in its slot -- silently training one prompt's tokens
+    under another prompt's group.
+    """
+    examples = [{"agent_ref": {"name": "x"}, "_rowidx": i} for i in range(8)]
+    # Row 0 finishes last, row 7 first: completion order is the exact reverse.
+    helper = _FakeRolloutHelper({i: (8 - i) * 0.01 for i in range(8)})
+
+    results = runtime.run_rollouts_sync(examples, MagicMock(), helper)
+
+    assert [rowidx for rowidx, _ in results] != list(range(8)), (
+        "fake did not overtake; the test is not exercising completion ordering"
+    )
+    for rowidx, result in results:
+        assert rowidx == result["answered_rowidx"]
+
+
+def test_run_rollouts_sync_rejects_row_without_rowidx():
+    """Pairing is by tag, so an untaggable row must fail loudly rather than by position."""
+    with pytest.raises(RuntimeError, match="_rowidx"):
+        runtime.run_rollouts_sync(
+            [{"agent_ref": {"name": "x"}}], MagicMock(), _FakeRolloutHelper()
+        )
+
+
+def test_run_rollouts_sync_reuses_one_live_event_loop():
+    """Successive batches must share a loop that is still running afterwards.
+
+    NeMo-Gym memoizes a global aiohttp session bound to the loop that first created it,
+    so a per-request loop leaves every batch after the first driving a closed loop.
+    """
+    helper = _FakeRolloutHelper()
+    loops = []
+
+    class _LoopCapturingHelper:
+        def run_examples(self, examples, head_server_config=None):
+            loops.append(asyncio.get_running_loop())
+            return helper.run_examples(examples, head_server_config)
+
+    capturing = _LoopCapturingHelper()
+    for _ in range(3):
+        runtime.run_rollouts_sync(
+            [{"agent_ref": {"name": "x"}, "_rowidx": 0}], MagicMock(), capturing
+        )
+
+    assert len(loops) == 3
+    assert len({id(loop) for loop in loops}) == 1
+    assert not loops[0].is_closed()
+    assert loops[0].is_running()
+
+
+def test_run_rollouts_sync_supports_concurrent_callers():
+    """Threaded handlers submit to the shared loop, so chunked POSTs can overlap."""
+    started = threading.Barrier(3, timeout=10)
+
+    class _BarrierHelper:
+        def run_examples(self, examples, head_server_config=None):
+            async def _one(row):
+                # Blocks until all three callers are in flight on the same loop.
+                await asyncio.to_thread(started.wait)
+                return row, {"response": {"output": []}, "reward": 0.0}
+
+            return [_one(row) for row in examples]
+
+    helper = _BarrierHelper()
+    results: list[int] = []
+
+    def _call():
+        out = runtime.run_rollouts_sync(
+            [{"agent_ref": {"name": "x"}, "_rowidx": 0}], MagicMock(), helper
+        )
+        results.append(len(out))
+
+    threads = [threading.Thread(target=_call) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert results == [1, 1, 1]
 
 
 def test_apply_uv_dirs_sets_config_keys_in_container(monkeypatch):

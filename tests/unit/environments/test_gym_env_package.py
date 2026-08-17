@@ -20,6 +20,7 @@ behaviour is pinned once here and each caller's own module tests only cover its 
 """
 
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -493,3 +494,167 @@ def test_install_is_quiet_when_nothing_is_replaced(tmp_path, monkeypatch, capsys
     pkg.install_environment_wheels({pkg.UV_VENV_DIR_KEY: str(venv_root)}, str(env_root))
 
     assert "WARNING replaced" not in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------------------
+# configure_environment_wheelhouse
+# --------------------------------------------------------------------------------------
+
+
+def test_wheelhouse_is_exported_to_uv_before_gym_builds_its_venvs(
+    tmp_path, monkeypatch
+):
+    """Gym composes its own `uv pip install`, so uv's env is the only lever we have."""
+    monkeypatch.delenv(pkg.UV_FIND_LINKS_ENV_VAR, raising=False)
+    env_root = _make_package(tmp_path / "environment")
+
+    wheels_dir = pkg.configure_environment_wheelhouse(str(env_root))
+
+    assert wheels_dir == env_root / "wheels"
+    assert os.environ[pkg.UV_FIND_LINKS_ENV_VAR] == str(env_root / "wheels")
+
+
+def test_wheelhouse_does_not_disable_the_index(tmp_path, monkeypatch):
+    """Whether PyPI is reachable is a network-policy call, owned by the egress allowlist.
+
+    Disabling the index here would put that decision in a second place, and would break
+    packages that legitimately need one: an adapter-wheels-v1 package vendors the
+    environment but not the image-bundled agent's own requirements.
+    """
+    monkeypatch.delenv(pkg.UV_FIND_LINKS_ENV_VAR, raising=False)
+    monkeypatch.delenv("UV_NO_INDEX", raising=False)
+    env_root = _make_package(tmp_path / "environment")
+
+    pkg.configure_environment_wheelhouse(str(env_root))
+
+    assert "UV_NO_INDEX" not in os.environ
+
+
+def test_wheelhouse_prepends_without_dropping_existing_find_links(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(pkg.UV_FIND_LINKS_ENV_VAR, "/opt/preexisting")
+    env_root = _make_package(tmp_path / "environment")
+
+    pkg.configure_environment_wheelhouse(str(env_root))
+
+    entries = os.environ[pkg.UV_FIND_LINKS_ENV_VAR].split(",")
+    assert entries[0] == str(env_root / "wheels")
+    assert "/opt/preexisting" in entries
+
+
+def test_wheelhouse_joins_with_a_comma_not_os_pathsep(tmp_path, monkeypatch):
+    """uv splits --find-links on ',' -- os.pathsep yields one bogus path and uv exits 2.
+
+    Asserted on the raw string rather than a re-split, because splitting on the same
+    separator the code used is what let this through: with a single entry every candidate
+    separator agrees, and an image that bakes its own UV_FIND_LINKS is the first to break.
+    Note NEMO_GYM_EXTRA_ROOTS is the opposite -- Gym parses that one with os.pathsep.
+    """
+    monkeypatch.setenv(pkg.UV_FIND_LINKS_ENV_VAR, "/opt/image-wheelhouse")
+    env_root = _make_package(tmp_path / "environment")
+
+    pkg.configure_environment_wheelhouse(str(env_root))
+
+    assert (
+        os.environ[pkg.UV_FIND_LINKS_ENV_VAR]
+        == f"{env_root / 'wheels'},/opt/image-wheelhouse"
+    )
+
+
+def test_wheelhouse_does_not_split_a_windows_style_drive_path(tmp_path, monkeypatch):
+    """A colon inside a path must survive; only ',' separates entries."""
+    monkeypatch.setenv(pkg.UV_FIND_LINKS_ENV_VAR, "https://example.invalid/simple")
+    env_root = _make_package(tmp_path / "environment")
+
+    pkg.configure_environment_wheelhouse(str(env_root))
+
+    assert "https://example.invalid/simple" in os.environ[
+        pkg.UV_FIND_LINKS_ENV_VAR
+    ].split(",")
+
+
+def test_wheelhouse_is_idempotent(tmp_path, monkeypatch):
+    """_spinup may run more than once in a worker; the path must not accumulate."""
+    monkeypatch.delenv(pkg.UV_FIND_LINKS_ENV_VAR, raising=False)
+    env_root = _make_package(tmp_path / "environment")
+
+    pkg.configure_environment_wheelhouse(str(env_root))
+    pkg.configure_environment_wheelhouse(str(env_root))
+
+    assert os.environ[pkg.UV_FIND_LINKS_ENV_VAR].split(",") == [
+        str(env_root / "wheels")
+    ]
+
+
+def test_no_wheelhouse_leaves_uv_untouched(tmp_path, monkeypatch):
+    """native-v1 installs from source and needs an index by design."""
+    monkeypatch.delenv(pkg.UV_FIND_LINKS_ENV_VAR, raising=False)
+    env_root = tmp_path / "environment"
+    (env_root / "resources_servers").mkdir(parents=True)
+
+    assert pkg.configure_environment_wheelhouse(str(env_root)) is None
+    assert pkg.UV_FIND_LINKS_ENV_VAR not in os.environ
+
+
+def test_empty_wheels_dir_is_not_a_wheelhouse(tmp_path, monkeypatch):
+    monkeypatch.delenv(pkg.UV_FIND_LINKS_ENV_VAR, raising=False)
+    env_root = tmp_path / "environment"
+    (env_root / "wheels").mkdir(parents=True)
+
+    assert pkg.configure_environment_wheelhouse(str(env_root)) is None
+    assert pkg.UV_FIND_LINKS_ENV_VAR not in os.environ
+
+
+def test_no_environment_path_is_a_noop(monkeypatch):
+    monkeypatch.delenv(pkg.UV_FIND_LINKS_ENV_VAR, raising=False)
+
+    assert pkg.configure_environment_wheelhouse(None) is None
+    assert pkg.configure_environment_wheelhouse("") is None
+    assert pkg.UV_FIND_LINKS_ENV_VAR not in os.environ
+
+
+def test_uv_is_isolated_from_the_ambient_project(monkeypatch):
+    """Gym's venv builds must not inherit the platform workspace's dependency pins.
+
+    Both integration modes run in the nemo-platform image, whose WORKDIR is the platform
+    workspace, and uv applies that project's [tool.uv] constraint/override-dependencies to
+    every invocation. A platform CVE pin the environment package cannot satisfy then fails
+    the resolve citing a bound that appears in none of the package's own wheels.
+    """
+    monkeypatch.delenv(pkg.UV_NO_CONFIG_ENV_VAR, raising=False)
+
+    pkg.isolate_uv_from_ambient_project()
+
+    assert os.environ[pkg.UV_NO_CONFIG_ENV_VAR] == "1"
+
+
+def test_uv_isolation_respects_an_explicit_opt_out(monkeypatch):
+    """setdefault, so an operator who deliberately set it keeps their value."""
+    monkeypatch.setenv(pkg.UV_NO_CONFIG_ENV_VAR, "0")
+
+    pkg.isolate_uv_from_ambient_project()
+
+    assert os.environ[pkg.UV_NO_CONFIG_ENV_VAR] == "0"
+
+
+def test_wheel_install_passes_no_config(tmp_path, monkeypatch):
+    """The install itself also passes --no-config, so it holds if the env var is cleared."""
+    env_root = _make_package(tmp_path / "environment")
+    venv_root = tmp_path / "venvs"
+    python = venv_root / "responses_api_agents" / "a" / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.touch()
+
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    pkg.install_environment_wheels({pkg.UV_VENV_DIR_KEY: str(venv_root)}, str(env_root))
+
+    assert calls, "expected a uv pip install invocation"
+    assert "--no-config" in calls[0]
+    assert "--no-index" in calls[0]
