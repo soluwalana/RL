@@ -32,6 +32,13 @@ from typing import Any, Mapping
 
 # Gym's own component search-path variable (nemo_gym.component_search_roots).
 NEMO_GYM_EXTRA_ROOTS_ENV_VAR = "NEMO_GYM_EXTRA_ROOTS"
+# uv reads this natively, which is how the wheelhouse reaches Gym's own install step.
+UV_FIND_LINKS_ENV_VAR = "UV_FIND_LINKS"
+# uv delimits --find-links with ",", unlike NEMO_GYM_EXTRA_ROOTS above, which Gym splits
+# on os.pathsep.
+UV_FIND_LINKS_SEPARATOR = ","
+# Makes uv ignore pyproject.toml / uv.toml discovery; honoured by every subcommand.
+UV_NO_CONFIG_ENV_VAR = "UV_NO_CONFIG"
 # Gym's global-config key for the root the per-server venvs are built under.
 UV_VENV_DIR_KEY = "uv_venv_dir"
 # Server types that run user environment code. Model servers are excluded: they proxy to
@@ -74,6 +81,59 @@ def register_environment_search_root(env_root: str | None) -> str | None:
     os.environ[NEMO_GYM_EXTRA_ROOTS_ENV_VAR] = joined
     print(f"NeMo Gym: environment search root -> {root}")
     return joined
+
+
+def isolate_uv_from_ambient_project() -> None:
+    """Stop uv applying the ``[tool.uv]`` dependency pins of the project owning the CWD.
+
+    uv discovers those from the working directory and applies them to every invocation,
+    so an environment package's venvs would otherwise resolve against the host project's
+    constraints. Set process-wide because Gym composes its own uv commands.
+    """
+    os.environ.setdefault(UV_NO_CONFIG_ENV_VAR, "1")
+
+
+def environment_wheels_dir(env_root: str | None) -> Path | None:
+    """Return the package's ``wheels/`` directory when it holds at least one wheel."""
+    root = (env_root or "").strip()
+    if not root:
+        return None
+    wheels_dir = Path(root) / "wheels"
+    return wheels_dir if wheels_dir.is_dir() and any(wheels_dir.glob("*.whl")) else None
+
+
+def configure_environment_wheelhouse(env_root: str | None) -> Path | None:
+    """Add an environment package's vendored wheels to uv's resolution sources.
+
+    Must run before ``RunHelper.start``: Gym composes the per-server ``uv pip install``
+    itself, so uv's environment is the only way to reach it. Packages the wheelhouse does
+    not carry still resolve from a package index.
+
+    Args:
+        env_root: Staging directory of the environment package, or None/"" when there is none.
+
+    Returns:
+        The wheelhouse directory, or None when the package ships no wheels.
+    """
+    wheels_dir = environment_wheels_dir(env_root)
+    if wheels_dir is None:
+        return None
+
+    existing = os.environ.get(UV_FIND_LINKS_ENV_VAR, "")
+    entries = [
+        str(wheels_dir),
+        *(
+            e
+            for e in existing.split(UV_FIND_LINKS_SEPARATOR)
+            if e and e != str(wheels_dir)
+        ),
+    ]
+    os.environ[UV_FIND_LINKS_ENV_VAR] = UV_FIND_LINKS_SEPARATOR.join(entries)
+    print(
+        f"NeMo Gym: environment wheelhouse -> {wheels_dir} "
+        f"({len(list(wheels_dir.glob('*.whl')))} wheel(s))"
+    )
+    return wheels_dir
 
 
 def _wheel_name_version(wheel: Path) -> tuple[str, str]:
@@ -222,6 +282,8 @@ def install_environment_wheels(
             "install",
             "--python",
             str(python),
+            # Explicit as well as the env var: this resolve must see only the wheelhouse.
+            "--no-config",
             "--no-index",
             f"--find-links={wheels_dir}",
             *requirements,

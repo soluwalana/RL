@@ -14,7 +14,11 @@
 
 """Unit tests for SandboxedGymActor rollout HTTP and factory selection."""
 
+import io
 import json
+import threading
+import time
+import urllib.error
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -146,6 +150,245 @@ def test_post_rollouts_accepts_results_envelope(monkeypatch):
     assert actor._post_rollouts([{"ok": True}]) == [{"reward": 1.0}]
 
 
+def _chunking_actor(chunk_size: int, max_in_flight: int, max_attempts: int = 1):
+    actor = _actor_class().__new__(_actor_class())
+    actor._host_handle = GymHostHandle(
+        host_id="host-1",
+        health_url="http://host.svc/health",
+        rollout_url="http://host.svc/rollouts/run",
+    )
+    actor._max_request_bytes = 1024
+    actor._max_response_bytes = 1024
+    actor._rollout_timeout_s = 1.0
+    actor._rollout_chunk_size = chunk_size
+    actor._rollout_max_in_flight = max_in_flight
+    actor._rollout_max_attempts = max_attempts
+    actor._rollout_retry_backoff_s = 0.0
+    return actor
+
+
+def _http_error(code: int, body: bytes):
+    return urllib.error.HTTPError(
+        url="http://host.svc/rollouts/run",
+        code=code,
+        msg="err",
+        hdrs=None,
+        fp=io.BytesIO(body),
+    )
+
+
+def test_post_rollouts_classifies_proxy_cutoff_as_retryable(monkeypatch):
+    """A proxy 500 carries no error envelope, so it is transport and worth retrying."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+
+    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(
+            _http_error(500, b'{"code":"GENERAL::UNKNOWN_ERROR","message":""}')
+        ),
+    )
+
+    with pytest.raises(RolloutTransportError) as exc:
+        actor._post_rollouts([{"ok": True}])
+
+    assert exc.value.retryable is True
+    assert exc.value.origin == "proxy"
+    message = str(exc.value)
+    assert "http://host.svc/rollouts/run" in message
+    assert "rollout_chunk_size" in message, "must say which knob to turn"
+
+
+def test_post_rollouts_classifies_environment_failure_as_terminal(monkeypatch):
+    """The host's own {"error": ...} envelope means the environment raised. Retrying it
+    just burns generation time, and the message must carry the environment's own text."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+
+    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
+    body = json.dumps(
+        {"error": {"code": "internal", "message": "KeyError: 'expected_answer'"}}
+    ).encode()
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(500, body)),
+    )
+
+    with pytest.raises(RolloutTransportError) as exc:
+        actor._post_rollouts([{"ok": True}])
+
+    assert exc.value.retryable is False
+    assert exc.value.origin == "sandbox"
+    assert "KeyError: 'expected_answer'" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_post_rollouts_chunked_retries_transport_failures(monkeypatch):
+    """One flaky chunk must not fail the step; 65 chunks make that likely, not rare."""
+    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=3)
+    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+
+    attempts: dict[int, int] = {}
+
+    def _fake_post(chunk):
+        idx = chunk[0]["_rowidx"]
+        attempts[idx] = attempts.get(idx, 0) + 1
+        if idx == 1 and attempts[idx] < 3:
+            raise RolloutTransportError("cut off", retryable=True, origin="proxy")
+        return [(idx, {"reward": float(idx)})]
+
+    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
+
+    results = await actor._post_rollouts_chunked([{"_rowidx": i} for i in range(3)])
+
+    assert sorted(rowidx for rowidx, _ in results) == [0, 1, 2]
+    assert attempts == {0: 1, 1: 3, 2: 1}
+
+
+@pytest.mark.asyncio
+async def test_post_rollouts_chunked_does_not_retry_environment_failures(monkeypatch):
+    """A deterministic environment error retried 3x per chunk wastes a whole batch."""
+    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=3)
+    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+
+    calls = 0
+
+    def _fake_post(chunk):
+        nonlocal calls
+        calls += 1
+        raise RolloutTransportError("env raised", retryable=False, origin="sandbox")
+
+    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
+
+    with pytest.raises(RolloutTransportError) as exc:
+        await actor._post_rollouts_chunked([{"_rowidx": 0}])
+
+    assert calls == 1
+    assert "failed after 1 attempt(s)" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_post_rollouts_chunked_reports_how_many_chunks_failed(monkeypatch):
+    """The batch-level error has to say the scale, not just surface one chunk's message."""
+    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=1)
+    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+
+    def _fake_post(chunk):
+        if chunk[0]["_rowidx"] % 2:
+            raise RolloutTransportError("cut off", retryable=True, origin="proxy")
+        return [(chunk[0]["_rowidx"], {"reward": 0.0})]
+
+    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
+
+    with pytest.raises(RolloutTransportError) as exc:
+        await actor._post_rollouts_chunked([{"_rowidx": i} for i in range(4)])
+
+    message = str(exc.value)
+    assert "2 of 4 rollout chunk(s) failed" in message
+    assert "batch of 4 example(s)" in message
+
+
+@pytest.mark.asyncio
+async def test_post_rollouts_chunked_splits_and_preserves_order(monkeypatch):
+    """Chunking is a transport detail: results must come back in batch order."""
+    actor = _chunking_actor(chunk_size=3, max_in_flight=8)
+    seen: list[list[dict]] = []
+
+    def _fake_post(chunk):
+        seen.append(chunk)
+        return [{"idx": row["idx"]} for row in chunk]
+
+    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
+
+    examples = [{"idx": i} for i in range(7)]
+    results = await actor._post_rollouts_chunked(examples)
+
+    # Chunks are dispatched concurrently, so completion order is not defined -- only the
+    # partition and the order of the reassembled results are.
+    assert sorted(len(chunk) for chunk in seen) == [1, 3, 3]
+    assert sorted([row["idx"] for row in chunk] for chunk in seen) == [
+        [0, 1, 2],
+        [3, 4, 5],
+        [6],
+    ]
+    assert [row["idx"] for row in results] == list(range(7))
+
+
+@pytest.mark.asyncio
+async def test_post_rollouts_chunked_bounds_in_flight(monkeypatch):
+    """Chunks run concurrently, but never more than max_in_flight at once."""
+    actor = _chunking_actor(chunk_size=1, max_in_flight=2)
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def _fake_post(chunk):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        try:
+            time.sleep(0.02)
+            return list(chunk)
+        finally:
+            with lock:
+                in_flight -= 1
+
+    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
+
+    results = await actor._post_rollouts_chunked([{"idx": i} for i in range(6)])
+
+    assert len(results) == 6
+    assert peak > 1, "chunks should overlap rather than run strictly serially"
+    assert peak <= 2
+
+
+def test_reward_summary_flags_all_zero_rewards():
+    """An all-zero batch is the common misconfiguration; it must be visible in logs."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import _reward_summary
+
+    assert "nonzero=0/3" in _reward_summary(
+        [{"reward": 0.0}, {"reward": 0.0}, {"reward": 0.0}]
+    )
+    summary = _reward_summary([{"reward": 1.0}, {"reward": 0.0}])
+    assert "nonzero=1/2" in summary
+    assert "mean=0.500" in summary
+    # The host may send (row, result) pairs rather than bare results.
+    assert "nonzero=1/1" in _reward_summary([({"meta": True}, {"reward": 1.0})])
+    # Absent rewards must not raise.
+    assert _reward_summary([{"no_reward": True}]) == "reward=n/a"
+
+
+def test_rowidx_span_renders_chunk_range():
+    from nemo_rl.environments.sandbox.nemo_gym_actor import _rowidx_span
+
+    assert _rowidx_span([{"_rowidx": 8}, {"_rowidx": 15}]) == "8-15"
+    assert _rowidx_span([{}]) == "?"
+
+
+def test_post_rollouts_error_reports_url_and_elapsed(monkeypatch):
+    """A proxy failure must name the URL and how long it was held, not just the code."""
+    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
+
+    def _raise(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            url="http://host.svc/rollouts/run",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=io.BytesIO(b'{"code":"GENERAL::UNKNOWN_ERROR"}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise)
+
+    with pytest.raises(RuntimeError) as exc:
+        actor._post_rollouts([{"ok": True}])
+
+    message = str(exc.value)
+    assert "http://host.svc/rollouts/run" in message
+    assert "1 example(s)" in message
+    assert "HTTP 500" in message
+
+
 @pytest.mark.asyncio
 async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
     actor = _actor_class().__new__(_actor_class())
@@ -158,12 +401,14 @@ async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
     actor._max_request_bytes = 1024
     actor._max_response_bytes = 1024
     actor._rollout_timeout_s = 1.0
+    actor._rollout_chunk_size = 8
+    actor._rollout_max_in_flight = 8
     actor._postprocess_cfg = {}
 
     monkeypatch.setattr(
         actor,
         "_post_rollouts",
-        lambda examples: [({"meta": True}, {"reward": 0.5})],
+        lambda examples: [(7, {"reward": 0.5})],
     )
     monkeypatch.setattr(
         actor,
@@ -194,6 +439,120 @@ async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
     assert streamed == [(7, {"post": 0.5}, streamed[0][2])]
     assert streamed[0][2] is not None
     assert "t/await_results" in streamed[0][2]
+
+
+def _pairing_actor(**overrides):
+    actor = _actor_class().__new__(_actor_class())
+    actor.cfg = {"use_fastokens": False}
+    actor._host_handle = GymHostHandle(
+        host_id="host-1",
+        health_url="http://host.svc/health",
+        rollout_url="http://host.svc/rollouts/run",
+    )
+    actor._max_request_bytes = 1024
+    actor._max_response_bytes = 1024
+    actor._rollout_timeout_s = 1.0
+    actor._rollout_chunk_size = 8
+    actor._rollout_max_in_flight = 8
+    actor._postprocess_cfg = {}
+    for key, value in overrides.items():
+        setattr(actor, key, value)
+    return actor
+
+
+def _patch_rollout_postprocess(monkeypatch, actor):
+    monkeypatch.setattr(
+        actor, "_postprocess", lambda result, tokenizer: {"post": result["reward"]}
+    )
+    monkeypatch.setattr(
+        "nemo_rl.environments.sandbox.nemo_gym_actor._has_nan_generation_logprobs",
+        lambda result: False,
+    )
+    monkeypatch.setattr(
+        "nemo_rl.utils.fastokens.maybe_patch_fastokens", lambda enabled: None
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_rollouts_pairs_by_rowidx_not_arrival_order(monkeypatch):
+    """A result must reach the prompt it was generated for, whatever order it lands in.
+
+    Gym runs a request's rows concurrently and returns them through as_completed, and
+    chunks are POSTed concurrently on top of that. Pairing on position would attach one
+    prompt's tokens and reward to another prompt's row -- silently, since the row set is
+    still a bijection and no guard downstream can notice.
+    """
+    actor = _pairing_actor()
+    _patch_rollout_postprocess(monkeypatch, actor)
+
+    examples = [{"_rowidx": i, "agent_ref": {"name": "agent_a"}} for i in range(4)]
+    # Exactly reversed: every result lands in a slot belonging to a different prompt.
+    monkeypatch.setattr(
+        actor,
+        "_post_rollouts",
+        lambda chunk: [
+            (row["_rowidx"], {"reward": float(row["_rowidx"])})
+            for row in reversed(chunk)
+        ],
+    )
+
+    streamed = [
+        item
+        async for item in actor.run_rollouts(
+            examples, tokenizer=object(), timer_prefix="t"
+        )
+    ]
+
+    assert [(rowidx, result["post"]) for rowidx, result, _ in streamed] == [
+        (0, 0.0),
+        (1, 1.0),
+        (2, 2.0),
+        (3, 3.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_rollouts_rejects_results_that_do_not_cover_the_batch(monkeypatch):
+    """A host that drops or invents a row must fail, not shift every later pairing."""
+    actor = _pairing_actor()
+    _patch_rollout_postprocess(monkeypatch, actor)
+
+    examples = [{"_rowidx": i, "agent_ref": {"name": "agent_a"}} for i in range(3)]
+    monkeypatch.setattr(
+        actor,
+        "_post_rollouts",
+        lambda chunk: [
+            (0, {"reward": 0.0}),
+            (0, {"reward": 1.0}),
+            (9, {"reward": 2.0}),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate _rowidx"):
+        [
+            item
+            async for item in actor.run_rollouts(
+                examples, tokenizer=object(), timer_prefix="t"
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_run_rollouts_rejects_untagged_results(monkeypatch):
+    """An untagged list is the shape that silently mispaired; it must not be accepted."""
+    actor = _pairing_actor()
+    _patch_rollout_postprocess(monkeypatch, actor)
+
+    examples = [{"_rowidx": 0, "agent_ref": {"name": "agent_a"}}]
+    monkeypatch.setattr(actor, "_post_rollouts", lambda chunk: [{"reward": 0.0}])
+
+    with pytest.raises(RuntimeError, match="untagged result"):
+        [
+            item
+            async for item in actor.run_rollouts(
+                examples, tokenizer=object(), timer_prefix="t"
+            )
+        ]
 
 
 def test_spinup_starts_broker_and_creates_host(monkeypatch):

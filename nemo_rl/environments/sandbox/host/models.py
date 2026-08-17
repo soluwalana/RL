@@ -36,6 +36,14 @@ DEFAULT_MAX_ROLLOUT_BYTES = 268_435_456  # 256 MiB
 DEFAULT_HOST_TTL_S = 14_400  # 4 hours
 DEFAULT_HOST_READY_TIMEOUT_S = 15 * 60
 DEFAULT_ROLLOUT_TIMEOUT_S = 30 * 60
+# A rollout batch is split into bounded POSTs so request duration and response size track
+# the chunk rather than the batch. Tune the two together: concurrency offsets the split.
+DEFAULT_ROLLOUT_CHUNK_SIZE = 8
+DEFAULT_ROLLOUT_MAX_IN_FLIGHT = 8
+# Per-chunk retry, applied to transport failures only: an error the host itself reported
+# is deterministic, so retrying it only costs generation time.
+DEFAULT_ROLLOUT_MAX_ATTEMPTS = 3
+DEFAULT_ROLLOUT_RETRY_BACKOFF_S = 5.0
 
 FORBIDDEN_BOOTSTRAP_ENV_PREFIXES = ("OPENSANDBOX_",)
 FORBIDDEN_BOOTSTRAP_ENV_KEYS = frozenset(
@@ -213,6 +221,12 @@ class SandboxConfig(BaseModel):
     runtime_http_port: int = Field(default=DEFAULT_RUNTIME_HTTP_PORT, ge=1, le=65535)
     ready_timeout_s: float = Field(default=float(DEFAULT_HOST_READY_TIMEOUT_S), gt=0)
     rollout_timeout_s: float = Field(default=float(DEFAULT_ROLLOUT_TIMEOUT_S), gt=0)
+    rollout_chunk_size: int = Field(default=DEFAULT_ROLLOUT_CHUNK_SIZE, gt=0)
+    rollout_max_in_flight: int = Field(default=DEFAULT_ROLLOUT_MAX_IN_FLIGHT, gt=0)
+    rollout_max_attempts: int = Field(default=DEFAULT_ROLLOUT_MAX_ATTEMPTS, ge=1)
+    rollout_retry_backoff_s: float = Field(
+        default=DEFAULT_ROLLOUT_RETRY_BACKOFF_S, ge=0
+    )
     host_provider_options: dict[str, Any] = Field(default_factory=dict)
     entrypoint: list[str] | None = None
 
