@@ -29,13 +29,17 @@ import json
 import os
 import socket
 import subprocess
+import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from nemo_rl.environments.gym_env_package import (
     UV_VENV_DIR_KEY,
+    configure_environment_wheelhouse,
     install_environment_wheels,
+    isolate_uv_from_ambient_project,
     register_environment_search_root,
 )
 
@@ -51,6 +55,11 @@ _READY: bool = False
 _RUN_HELPER: Any = None
 _HEAD_SERVER_CONFIG: Any = None
 _ROLLOUT_HELPER: Any = None
+_EVENT_LOOP: asyncio.AbstractEventLoop | None = None
+_EVENT_LOOP_LOCK = threading.Lock()
+# Bounded so a deeply recursive failure cannot produce an oversized error response.
+_TRACEBACK_FRAMES = 20
+_MAX_TRACEBACK_CHARS = 8_000
 
 
 def _env_int(name: str, default: int) -> int:
@@ -160,6 +169,11 @@ def bootstrap_gym_host() -> tuple[Any, Any, Any]:
     # RunHelper.start.
     environment_path = _environment_path()
     register_environment_search_root(environment_path)
+    # Before start(): Gym composes the per-server install itself, so uv's environment
+    # is the only way the wheelhouse reaches it, and the only way to keep the platform
+    # workspace at WORKDIR from imposing its pins on the environment's venvs.
+    isolate_uv_from_ambient_project()
+    configure_environment_wheelhouse(environment_path)
 
     from nemo_gym.cli.env import RunHelper
     from nemo_gym.global_config import GlobalConfigDictParserConfig
@@ -189,14 +203,41 @@ async def _collect_rollout_results(
     examples: list[dict],
     head_server_config: Any,
     rollout_helper: Any,
-) -> list[dict]:
-    results: list[dict] = []
+) -> list[list]:
+    """Run ``examples`` and return ``[[_rowidx, result], ...]``.
+
+    Tagged rather than ordered: Gym yields through ``asyncio.as_completed``, so results
+    arrive in completion order and the caller pairs them by tag.
+    """
+    results: list[list] = []
     for task in rollout_helper.run_examples(
         examples=examples, head_server_config=head_server_config
     ):
-        _row, nemo_gym_result = await task
-        results.append(nemo_gym_result)
+        row, nemo_gym_result = await task
+        if "_rowidx" not in row:
+            raise RuntimeError(
+                "NeMo-Gym row is missing _rowidx; results cannot be paired with prompts"
+            )
+        results.append([row["_rowidx"], nemo_gym_result])
     return results
+
+
+def _ensure_event_loop() -> asyncio.AbstractEventLoop:
+    """Return the process-wide event loop that every rollout request runs on.
+
+    One loop per process, not one per request: the shared HTTP client binds to the loop
+    that created it, so a per-request loop would leave it pointing at a closed one.
+    """
+    global _EVENT_LOOP
+    with _EVENT_LOOP_LOCK:
+        if _EVENT_LOOP is None:
+            _EVENT_LOOP = asyncio.new_event_loop()
+            threading.Thread(
+                target=_EVENT_LOOP.run_forever,
+                name="gym-host-event-loop",
+                daemon=True,
+            ).start()
+        return _EVENT_LOOP
 
 
 def run_rollouts_sync(
@@ -204,9 +245,12 @@ def run_rollouts_sync(
     head_server_config: Any,
     rollout_helper: Any,
 ) -> list[dict]:
-    return asyncio.run(
-        _collect_rollout_results(examples, head_server_config, rollout_helper)
-    )
+    # Handler threads hand work to the shared loop and block on the result, so several
+    # concurrent /rollouts/run calls interleave on one loop rather than one per thread.
+    return asyncio.run_coroutine_threadsafe(
+        _collect_rollout_results(examples, head_server_config, rollout_helper),
+        _ensure_event_loop(),
+    ).result()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -276,9 +320,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             results = run_rollouts_sync(examples, _HEAD_SERVER_CONFIG, _ROLLOUT_HELPER)
         except Exception as exc:
+            # Returned to the caller: this process's stdout is not surfaced to the job.
+            detail = traceback.format_exc(limit=_TRACEBACK_FRAMES)
+            print(f"gym-host: rollouts/run failed: {detail}", flush=True)
             self._send_json(
                 500,
-                _runtime_error("internal", str(exc)),
+                _runtime_error(
+                    "internal",
+                    f"{type(exc).__name__}: {exc}\n{detail[-_MAX_TRACEBACK_CHARS:]}",
+                ),
             )
             return
 
@@ -332,11 +382,13 @@ def main() -> None:
         "NMP_MAX_RESPONSE_BYTES", Handler.max_response_bytes
     )
 
+    _ensure_event_loop()
     _RUN_HELPER, _HEAD_SERVER_CONFIG, _ROLLOUT_HELPER = bootstrap_gym_host()
     _READY = True
 
     port = _env_int("NMP_RUNTIME_HTTP_PORT", _DEFAULT_HTTP_PORT)
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    # Threaded so chunked rollouts can overlap and /health stays answerable mid-batch.
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

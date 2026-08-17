@@ -16,8 +16,10 @@
 
 import asyncio
 import concurrent.futures
+import http.client
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -46,6 +48,10 @@ from nemo_rl.environments.sandbox.host.entrypoint import (
     gym_uv_venv_dir,
 )
 from nemo_rl.environments.sandbox.host.models import (
+    DEFAULT_ROLLOUT_CHUNK_SIZE,
+    DEFAULT_ROLLOUT_MAX_ATTEMPTS,
+    DEFAULT_ROLLOUT_MAX_IN_FLIGHT,
+    DEFAULT_ROLLOUT_RETRY_BACKOFF_S,
     GymHostEgressRule,
     GymHostSpec,
     GymHostVolumeMount,
@@ -60,8 +66,128 @@ from nemo_rl.utils.timer import Timer
 
 
 LOGGER = logging.getLogger(__name__)
+# Opted in explicitly: the root logger is configured without a level, so INFO records
+# here would otherwise be dropped and a rollout would emit no progress at all.
+LOGGER.setLevel(logging.INFO)
 
 T = TypeVar("T")
+
+
+class RolloutTransportError(RuntimeError):
+    """A failed rollout POST, tagged with where it failed and whether a retry can help."""
+
+    def __init__(self, message: str, *, retryable: bool, origin: str) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        # "proxy" (in transit), "sandbox" (the host reported it), or "client" (our own limits).
+        self.origin = origin
+
+
+def _sandbox_reported_error(body: str) -> str | None:
+    """Return the Gym host's own error message from a response body, or None.
+
+    The host wraps its failures as ``{"error": {"code", "message"}}``; a failure in transit
+    has no such envelope. Distinguishes an environment error from a dropped connection.
+    """
+    try:
+        decoded = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, Mapping):
+        return None
+    error = decoded.get("error")
+    if error is None:
+        return None
+    if isinstance(error, Mapping):
+        code = error.get("code", "unknown")
+        return f"{code}: {error.get('message', '')}".strip()
+    return str(error)
+
+
+# Below this, a request cannot have been cut for staying open too long, so the host went
+# away instead. Only used to pick which hint an error carries.
+MIN_PROXY_CUTOFF_S = 30.0
+
+
+def _transit_failure_hint(elapsed: float) -> str:
+    """Name the likely cause of a POST that failed in transit, based on how long it ran."""
+    if elapsed < MIN_PROXY_CUTOFF_S:
+        return (
+            "too fast to be the proxy's request-duration cap, so the host stopped "
+            "answering -- check whether the sandbox is still running (OOMKilled, evicted, "
+            "or crashed)"
+        )
+    return (
+        "the sandbox proxy caps how long one request may stay open, so lower "
+        "sandbox.rollout_chunk_size if this persists"
+    )
+
+
+def _unwrap_result(entry: Any) -> Any:
+    """Return the Gym result from an entry the host may send as ``(row, result)``."""
+    if isinstance(entry, (list, tuple)) and len(entry) == 2:
+        return entry[1]
+    return entry
+
+
+def _index_results_by_rowidx(results: list, examples: list[dict]) -> dict[Any, Any]:
+    """Map each ``_rowidx`` to its result, rejecting anything but an exact cover.
+
+    The host runs examples concurrently and returns them tagged rather than ordered, so
+    results are paired by tag. Validated rather than trusted: a mispairing would attribute
+    one prompt's tokens and reward to another and raise nothing.
+    """
+    by_rowidx: dict[Any, Any] = {}
+    for entry in results:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            raise RuntimeError(
+                "rollout host returned an untagged result; expected [_rowidx, result] "
+                f"pairs, got {type(entry).__name__}"
+            )
+        rowidx, result = entry
+        if rowidx in by_rowidx:
+            raise RuntimeError(f"rollout host returned duplicate _rowidx {rowidx}")
+        by_rowidx[rowidx] = result
+
+    expected = {row["_rowidx"] for row in examples}
+    if by_rowidx.keys() != expected:
+        missing = sorted(expected - by_rowidx.keys())
+        unexpected = sorted(by_rowidx.keys() - expected)
+        raise RuntimeError(
+            f"rollout host result rows do not cover the batch; "
+            f"missing={missing} unexpected={unexpected}"
+        )
+    return by_rowidx
+
+
+def _rowidx_span(chunk: list[dict]) -> str:
+    """Render a chunk's ``_rowidx`` range, so a stalled chunk names its own rows."""
+    indices = [row["_rowidx"] for row in chunk if "_rowidx" in row]
+    if not indices:
+        return "?"
+    return f"{min(indices)}-{max(indices)}"
+
+
+def _reward_summary(results: list) -> str:
+    """Summarize a chunk's rewards, including how many were non-zero.
+
+    The non-zero count distinguishes an all-zero batch, which a mean alone can hide.
+    """
+    rewards = []
+    for entry in results:
+        result = _unwrap_result(entry)
+        if isinstance(result, Mapping) and "reward" in result:
+            try:
+                rewards.append(float(result["reward"]))
+            except (TypeError, ValueError):
+                continue
+    if not rewards:
+        return "reward=n/a"
+    nonzero = sum(1 for reward in rewards if reward != 0.0)
+    return (
+        f"reward mean={sum(rewards) / len(rewards):.3f} "
+        f"min={min(rewards):.3f} max={max(rewards):.3f} nonzero={nonzero}/{len(rewards)}"
+    )
 
 
 def _run_coro_sync(coro: Coroutine[Any, Any, T]) -> T:
@@ -256,6 +382,10 @@ class SandboxedGymActor(EnvironmentInterface):
         self._rollout_timeout_s = 30 * 60.0
         self._max_request_bytes = 268_435_456
         self._max_response_bytes = 268_435_456
+        self._rollout_chunk_size = DEFAULT_ROLLOUT_CHUNK_SIZE
+        self._rollout_max_in_flight = DEFAULT_ROLLOUT_MAX_IN_FLIGHT
+        self._rollout_max_attempts = DEFAULT_ROLLOUT_MAX_ATTEMPTS
+        self._rollout_retry_backoff_s = DEFAULT_ROLLOUT_RETRY_BACKOFF_S
         self._postprocess_cfg = {
             "invalid_tool_call_patterns": cfg.get("invalid_tool_call_patterns"),
             "thinking_tags": cfg.get("thinking_tags"),
@@ -275,6 +405,10 @@ class SandboxedGymActor(EnvironmentInterface):
         self._rollout_timeout_s = float(sandbox.rollout_timeout_s)
         self._max_request_bytes = sandbox.max_request_bytes
         self._max_response_bytes = sandbox.max_response_bytes
+        self._rollout_chunk_size = sandbox.rollout_chunk_size
+        self._rollout_max_in_flight = sandbox.rollout_max_in_flight
+        self._rollout_max_attempts = sandbox.rollout_max_attempts
+        self._rollout_retry_backoff_s = sandbox.rollout_retry_backoff_s
 
         broker_cfg = EpisodeBrokerConfig.model_validate(
             {"job_id": sandboxed.job_id, **dict(sandboxed.episode_broker)}
@@ -327,6 +461,93 @@ class SandboxedGymActor(EnvironmentInterface):
             nemo_gym_result, tokenizer
         )
 
+    async def _post_rollouts_chunked(self, examples: list[dict]) -> list:
+        """POST ``examples`` as bounded concurrent chunks, returning results in batch order.
+
+        Chunking keeps request duration and response size proportional to a chunk rather
+        than the whole batch.
+        """
+        chunks = [
+            examples[start : start + self._rollout_chunk_size]
+            for start in range(0, len(examples), self._rollout_chunk_size)
+        ]
+        semaphore = asyncio.Semaphore(self._rollout_max_in_flight)
+
+        async def _post_chunk(index: int, chunk: list[dict]) -> list:
+            rows = _rowidx_span(chunk)
+            label = f"chunk {index + 1}/{len(chunks)}"
+            for attempt in range(1, self._rollout_max_attempts + 1):
+                try:
+                    async with semaphore:
+                        # Logged inside the semaphore so the timestamp is when it goes out.
+                        LOGGER.info(
+                            "rollout %s: POST %d example(s) [rows %s]%s",
+                            label,
+                            len(chunk),
+                            rows,
+                            ""
+                            if attempt == 1
+                            else f" (attempt {attempt}/{self._rollout_max_attempts})",
+                        )
+                        started = time.monotonic()
+                        results = await asyncio.to_thread(self._post_rollouts, chunk)
+                except RolloutTransportError as exc:
+                    if not exc.retryable or attempt == self._rollout_max_attempts:
+                        raise RolloutTransportError(
+                            f"rollout {label} (rows {rows}, {len(chunk)} example(s)) "
+                            f"failed after {attempt} attempt(s): {exc}",
+                            retryable=exc.retryable,
+                            origin=exc.origin,
+                        ) from exc
+                    backoff = self._rollout_retry_backoff_s * attempt
+                    LOGGER.warning(
+                        "rollout %s [rows %s] attempt %d/%d failed (%s); retrying in "
+                        "%.1fs: %s",
+                        label,
+                        rows,
+                        attempt,
+                        self._rollout_max_attempts,
+                        exc.origin,
+                        backoff,
+                        exc,
+                    )
+                    # Slept outside the semaphore so a backing-off chunk frees its slot.
+                    await asyncio.sleep(backoff)
+                    continue
+                LOGGER.info(
+                    "rollout %s: %d result(s) in %.1fs [rows %s] %s",
+                    label,
+                    len(results),
+                    time.monotonic() - started,
+                    rows,
+                    _reward_summary(results),
+                )
+                return results
+            raise AssertionError("unreachable: loop either returns or raises")
+
+        # return_exceptions so a failure does not leave the other chunks running detached.
+        parts = await asyncio.gather(
+            *(_post_chunk(index, chunk) for index, chunk in enumerate(chunks)),
+            return_exceptions=True,
+        )
+        failures = [part for part in parts if isinstance(part, BaseException)]
+        if failures:
+            # Every chunk failing points at the host rather than at the requests.
+            whole_batch = (
+                " Every chunk failed, so the sandbox itself is the likely cause rather "
+                "than any one request."
+                if len(failures) == len(chunks) > 1
+                else ""
+            )
+            raise RolloutTransportError(
+                f"{len(failures)} of {len(chunks)} rollout chunk(s) failed for this "
+                f"batch of {len(examples)} example(s).{whole_batch} "
+                f"First failure: {failures[0]}",
+                retryable=False,
+                origin=getattr(failures[0], "origin", "proxy"),
+            ) from failures[0]
+        return [result for part in parts for result in part]
+
     def _post_rollouts(self, examples: list[dict]) -> list:
         assert self._host_handle is not None
         body = json.dumps({"examples": examples}).encode("utf-8")
@@ -344,24 +565,57 @@ class SandboxedGymActor(EnvironmentInterface):
                 **self._host_handle.headers,
             },
         )
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(
                 request, timeout=self._rollout_timeout_s
             ) as response:
                 payload = response.read()
         except urllib.error.HTTPError as exc:
+            elapsed = time.monotonic() - started
             error_body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"rollout POST failed with HTTP {exc.code}: {error_body}"
+            reported = _sandbox_reported_error(error_body)
+            if reported is not None:
+                # The host answered, so the environment failed: deterministic.
+                raise RolloutTransportError(
+                    f"the sandboxed environment failed this rollout after {elapsed:.1f}s "
+                    f"for {len(examples)} example(s) (HTTP {exc.code} from "
+                    f"{self._host_handle.rollout_url}): {reported}",
+                    retryable=False,
+                    origin="sandbox",
+                ) from exc
+            raise RolloutTransportError(
+                f"rollout POST was rejected in transit with HTTP {exc.code} after "
+                f"{elapsed:.1f}s for {len(examples)} example(s) to "
+                f"{self._host_handle.rollout_url}; {_transit_failure_hint(elapsed)}. "
+                f"Body: {error_body[:512]}",
+                # A 5xx with no host envelope came from in transit, so a retry may work.
+                retryable=exc.code >= 500,
+                origin="proxy",
+            ) from exc
+        except (http.client.HTTPException, OSError) as exc:
+            raise RolloutTransportError(
+                f"rollout POST to {self._host_handle.rollout_url} lost its connection "
+                f"after {time.monotonic() - started:.1f}s for {len(examples)} "
+                f"example(s): {type(exc).__name__}: {exc}",
+                retryable=True,
+                origin="proxy",
             ) from exc
         if len(payload) > self._max_response_bytes:
-            raise ValueError(
+            raise RolloutTransportError(
                 f"rollout response exceeds max_response_bytes "
-                f"({len(payload)} > {self._max_response_bytes})"
+                f"({len(payload)} > {self._max_response_bytes}); lower "
+                f"sandbox.rollout_chunk_size or raise sandbox.max_response_bytes",
+                retryable=False,
+                origin="client",
             )
         decoded = json.loads(payload.decode("utf-8"))
         if isinstance(decoded, dict) and "error" in decoded:
-            raise RuntimeError(f"rollout runtime error: {decoded['error']}")
+            raise RolloutTransportError(
+                f"the sandboxed environment failed this rollout: {decoded['error']}",
+                retryable=False,
+                origin="sandbox",
+            )
         if isinstance(decoded, dict) and "results" in decoded:
             return list(decoded["results"])
         if isinstance(decoded, list):
@@ -387,20 +641,25 @@ class SandboxedGymActor(EnvironmentInterface):
         timer = Timer()
         counts_left = Counter(row["agent_ref"]["name"] for row in nemo_gym_examples)
 
-        # A rollout batch is one blocking POST that can run for many minutes and is
-        # otherwise unlogged on both sides, so a healthy run looks like a hung one.
+        num_chunks = -(-len(nemo_gym_examples) // self._rollout_chunk_size)
         LOGGER.info(
-            "rollout batch: POST %d example(s) -> %s",
+            "rollout batch: POST %d example(s) as %d chunk(s) of %d "
+            "(max %d in flight) -> %s",
             len(nemo_gym_examples),
+            num_chunks,
+            self._rollout_chunk_size,
+            self._rollout_max_in_flight,
             self._host_handle.rollout_url,
         )
         timer.start("_run_rollouts_total")
         with timer.time(label=f"{timer_prefix}/await_results"):
-            results = await asyncio.to_thread(self._post_rollouts, nemo_gym_examples)
+            results = await self._post_rollouts_chunked(nemo_gym_examples)
         LOGGER.info(
-            "rollout batch: %d result(s) in %.1fs",
+            "rollout batch: %d result(s) in %.1fs across %d chunk(s) | %s",
             len(results),
             timer.get_timing_metrics("sum").get(f"{timer_prefix}/await_results", 0.0),
+            num_chunks,
+            _reward_summary(results),
         )
 
         if len(results) != len(nemo_gym_examples):
@@ -409,13 +668,10 @@ class SandboxedGymActor(EnvironmentInterface):
                 f"{len(nemo_gym_examples)} examples"
             )
 
-        for index, (nemo_gym_row, pair) in enumerate(
-            zip(nemo_gym_examples, results, strict=True)
-        ):
-            if isinstance(pair, (list, tuple)) and len(pair) == 2:
-                _, nemo_gym_result = pair
-            else:
-                nemo_gym_result = pair
+        results_by_rowidx = _index_results_by_rowidx(results, nemo_gym_examples)
+
+        for index, nemo_gym_row in enumerate(nemo_gym_examples):
+            nemo_gym_result = results_by_rowidx[nemo_gym_row["_rowidx"]]
 
             with timer.time(label=f"{timer_prefix}/postprocess_results"):
                 nemo_rl_result = self._postprocess(nemo_gym_result, tokenizer)
