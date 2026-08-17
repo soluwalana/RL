@@ -15,7 +15,6 @@
 import json
 import threading
 from http.server import HTTPServer
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -198,113 +197,50 @@ def test_uv_cache_dir_returns_none_when_uv_unavailable(monkeypatch):
     assert runtime._uv_cache_dir() is None
 
 
-def _make_agent_venv(venv_root, name):
-    """Mirror Gym's <uv_venv_dir>/<server_type>/<name>/.venv layout."""
-    python = venv_root / "responses_api_agents" / name / ".venv" / "bin" / "python"
-    python.parent.mkdir(parents=True)
-    python.touch()
-    return python
+def test_environment_path_reads_the_bootstrap_env(tmp_path, monkeypatch):
+    """The trusted actor injects the sandbox-side staging path as NMP_ENVIRONMENT_PATH."""
+    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, "/job/environment")
+    assert runtime._environment_path() == "/job/environment"
 
 
-def test_install_environment_wheels_installs_offline_into_agent_venvs(tmp_path, monkeypatch):
-    """The package's vendored closure must reach the agent venv without an index.
-
-    Gym builds the agent venv from requirements.txt, which carries the framework only, so
-    nothing else puts the environment package where `vf.load_environment` can import it.
-    """
-    env_root = tmp_path / "environment"
-    wheels = env_root / "wheels"
-    wheels.mkdir(parents=True)
-    (wheels / "ascii_tree-0.1.0-py3-none-any.whl").touch()
-    (wheels / "verifiers-0.1.14-py3-none-any.whl").touch()
-
-    venv_root = tmp_path / "gym_venvs"
-    python = _make_agent_venv(venv_root, "verifiers_agent")
-
-    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, str(env_root))
-    calls = []
-    monkeypatch.setattr(runtime.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
-
-    runtime.install_environment_wheels({runtime.UV_VENV_DIR_KEY: str(venv_root)})
-
-    assert len(calls) == 1
-    cmd, kwargs = calls[0]
-    assert kwargs["check"] is True
-    assert cmd[:3] == ["uv", "pip", "install"]
-    assert str(python) in cmd
-    # No index may be consulted: the sandbox cannot reach the one the env was published to.
-    assert "--no-index" in cmd
-    assert f"--find-links={wheels}" in cmd
-    # Names, not paths: `uv pip install <path>.whl` uninstalls and reinstalls even when that
-    # exact version is already present, which would rebuild the venv on every spin-up.
-    assert "ascii_tree==0.1.0" in cmd
-    assert "verifiers==0.1.14" in cmd
-    assert not any(c.endswith(".whl") for c in cmd)
+@pytest.mark.parametrize("value", ["", "   "])
+def test_environment_path_none_when_blank(value, monkeypatch):
+    """Standalone runs and bundled-config_paths jobs leave it unset; both are valid."""
+    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, value)
+    assert runtime._environment_path() is None
 
 
-def test_install_environment_wheels_raises_when_no_agent_venv_exists(tmp_path, monkeypatch):
-    """Wheels to install but nowhere to put them must fail here, not at the first rollout."""
-    env_root = tmp_path / "environment"
-    wheels = env_root / "wheels"
-    wheels.mkdir(parents=True)
-    (wheels / "ascii_tree-0.1.0-py3-none-any.whl").touch()
-
-    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, str(env_root))
-    monkeypatch.setattr(runtime.subprocess, "run", lambda *a, **k: None)
-
-    with pytest.raises(RuntimeError, match="no agent venv"):
-        runtime.install_environment_wheels({runtime.UV_VENV_DIR_KEY: str(tmp_path / "empty")})
-
-
-@pytest.mark.parametrize(
-    ("filename", "expected"),
-    [
-        ("ascii_tree-0.1.0-py3-none-any.whl", "ascii_tree==0.1.0"),
-        ("verifiers-0.1.14-py3-none-any.whl", "verifiers==0.1.14"),
-        # Optional build tag sits between version and python tag.
-        ("foo-1.2.3-1-cp313-cp313-manylinux_2_17_x86_64.whl", "foo==1.2.3"),
-    ],
-)
-def test_wheel_requirement_parses_pep427_filenames(filename, expected):
-    assert runtime._wheel_requirement(Path(filename)) == expected
-
-
-def test_wheel_requirement_rejects_non_wheel_filenames():
-    with pytest.raises(ValueError, match="PEP 427"):
-        runtime._wheel_requirement(Path("not-a-wheel.whl"))
-
-
-def test_install_environment_wheels_noop_without_wheels(tmp_path, monkeypatch):
-    """native-v1 packages and bundled config_paths runs ship no wheels; both are valid."""
-    env_root = tmp_path / "environment"
-    (env_root / "configs").mkdir(parents=True)
-    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, str(env_root))
-
-    def _never(*a, **k):
-        raise AssertionError("no install should run when the package ships no wheels")
-
-    monkeypatch.setattr(runtime.subprocess, "run", _never)
-    runtime.install_environment_wheels({runtime.UV_VENV_DIR_KEY: str(tmp_path / "gym_venvs")})
-
-
-def test_install_environment_wheels_noop_without_environment_path(monkeypatch):
-    """Standalone NeMo-RL sets no environment path and must stay unaffected."""
+def test_environment_path_none_when_unset(monkeypatch):
     monkeypatch.delenv(runtime.ENVIRONMENT_PATH_ENV_KEY, raising=False)
-
-    def _never(*a, **k):
-        raise AssertionError("no install should run outside a platform job")
-
-    monkeypatch.setattr(runtime.subprocess, "run", _never)
-    runtime.install_environment_wheels({})
+    assert runtime._environment_path() is None
 
 
-def test_agent_venv_pythons_skips_incomplete_venvs(tmp_path):
-    """A venv dir without an interpreter is half-built; installing into it would fail."""
-    venv_root = tmp_path / "gym_venvs"
-    good = _make_agent_venv(venv_root, "verifiers_agent")
-    (venv_root / "responses_api_agents" / "half_built" / ".venv").mkdir(parents=True)
-    # Model servers are not agents and never load the environment package.
-    (venv_root / "responses_api_models" / "vllm_model" / ".venv" / "bin").mkdir(parents=True)
-    (venv_root / "responses_api_models" / "vllm_model" / ".venv" / "bin" / "python").touch()
+def test_bootstrap_registers_the_search_root_before_importing_gym(monkeypatch):
+    """Ordering contract: the root must be on the search path before nemo_gym is imported.
 
-    assert runtime._agent_venv_pythons({runtime.UV_VENV_DIR_KEY: str(venv_root)}) == [good]
+    Gym's ``_augment_sys_path()`` runs at import time and folds ``NEMO_GYM_EXTRA_ROOTS``
+    into ``sys.path``, so a root registered afterwards never reaches this process's import
+    path. Forcing the Gym import to fail proves the registration already happened by then,
+    without needing Gym installed.
+    """
+    import sys
+
+    registered = []
+    monkeypatch.setattr(
+        runtime,
+        "register_environment_search_root",
+        lambda root: registered.append(root),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "install_environment_wheels",
+        lambda *a, **k: pytest.fail("wheels must not be installed before start()"),
+    )
+    monkeypatch.setenv(runtime.ENVIRONMENT_PATH_ENV_KEY, "/job/environment")
+    # sys.modules[name] = None makes `import name` raise ImportError (CPython contract).
+    monkeypatch.setitem(sys.modules, "nemo_gym.cli.env", None)
+
+    with pytest.raises(ImportError):
+        runtime.bootstrap_gym_host()
+
+    assert registered == ["/job/environment"]

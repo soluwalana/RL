@@ -183,7 +183,9 @@ def local_resolver_addresses(path: str | None = None) -> tuple[str, ...]:
     try:
         content = Path(resolv_conf).read_text()
     except OSError:
-        LOGGER.warning("Could not read %s; no resolver will be carved out.", resolv_conf)
+        LOGGER.warning(
+            "Could not read %s; no resolver will be carved out.", resolv_conf
+        )
         return ()
     addresses: list[str] = []
     for line in content.splitlines():

@@ -387,9 +387,21 @@ class SandboxedGymActor(EnvironmentInterface):
         timer = Timer()
         counts_left = Counter(row["agent_ref"]["name"] for row in nemo_gym_examples)
 
+        # A rollout batch is one blocking POST that can run for many minutes and is
+        # otherwise unlogged on both sides, so a healthy run looks like a hung one.
+        LOGGER.info(
+            "rollout batch: POST %d example(s) -> %s",
+            len(nemo_gym_examples),
+            self._host_handle.rollout_url,
+        )
         timer.start("_run_rollouts_total")
         with timer.time(label=f"{timer_prefix}/await_results"):
             results = await asyncio.to_thread(self._post_rollouts, nemo_gym_examples)
+        LOGGER.info(
+            "rollout batch: %d result(s) in %.1fs",
+            len(results),
+            timer.get_timing_metrics("sum").get(f"{timer_prefix}/await_results", 0.0),
+        )
 
         if len(results) != len(nemo_gym_examples):
             raise RuntimeError(

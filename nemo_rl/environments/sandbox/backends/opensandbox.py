@@ -257,7 +257,6 @@ class OpenSandboxEpisodeBackend:
             await self._provider.download_file(handle, path, target)
             return target.read_bytes()
 
-
     async def list_backend_ids(self, job_id: str) -> list[str]:
         """List episodes OpenSandbox believes belong to ``job_id``.
 

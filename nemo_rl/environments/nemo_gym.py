@@ -32,6 +32,10 @@ from nemo_rl.distributed.virtual_cluster import (
     _get_free_port_local,
     _get_node_ip_local,
 )
+from nemo_rl.environments.gym_env_package import (
+    install_environment_wheels,
+    register_environment_search_root,
+)
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.utils.routed_experts_codec import decode_routed_experts
 from nemo_rl.utils.timer import Timer
@@ -121,6 +125,11 @@ class NemoGymConfig(TypedDict):
     # Forwarded from policy.tokenizer.use_fastokens so rollout actors patch their
     # tokenizer consistently with the driver. Defaults to off when absent.
     use_fastokens: NotRequired[bool]
+    # Staging directory of a platform environment FileSet, when one was supplied.
+    # Colocated runs need it for the same two reasons the sandboxed host does: it is
+    # Gym's search root for native-v1 server trees, and the source of the vendored
+    # wheels for wheels-v1 / adapter-wheels-v1. Absent for standalone NeMo-RL.
+    environment_path: NotRequired[str | None]
 
 
 def _detect_invalid_tool_call_and_malformed_thinking(
@@ -202,6 +211,11 @@ class NemoGym(EnvironmentInterface):
         _gym_port_high = self.cfg.get("port_range_high", DEFAULT_GYM_PORT_RANGE_HIGH)
         self.head_server_port = _get_free_port_local(_gym_port_low, _gym_port_high)
 
+        # Registered before nemo_gym is imported, not just before RunHelper.start:
+        # _augment_sys_path() folds the extra roots into sys.path at import time.
+        environment_path = self.cfg.get("environment_path")
+        register_environment_search_root(environment_path)
+
         from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
         from nemo_gym.rollout_collection import RolloutCollectionHelper
         from nemo_gym.server_utils import HEAD_SERVER_KEY_NAME, BaseServerConfig
@@ -277,6 +291,8 @@ Depending on your data shape, you may want to change these values."""
                 skip_load_from_cli=True,
             )
         )
+        # After start(): the per-server venvs do not exist until it returns.
+        install_environment_wheels(initial_global_config_dict, environment_path)
 
         # Setup for rollout collection
         self.head_server_config = BaseServerConfig(
@@ -671,12 +687,12 @@ def spinup_nemo_gym_actor(
     num_gpu_nodes = nemo_gym_dict.pop("num_gpu_nodes", 0)
 
     if sandboxed_flag:
+        from nemo_rl.environments.sandbox.host.models import NemoGymSandboxedConfig
         from nemo_rl.environments.sandbox.nemo_gym_actor import (
             SANDBOXED_GYM_ACTOR_FQN,
             SandboxedGymActor,
             SandboxedGymActorConfig,
         )
-        from nemo_rl.environments.sandbox.host.models import NemoGymSandboxedConfig
 
         sandboxed_cfg = NemoGymSandboxedConfig.model_validate(
             {
@@ -736,6 +752,7 @@ def spinup_nemo_gym_actor(
         routed_experts_dtype=routed_experts_dtype,
         use_fastokens=use_fastokens,
         initial_global_config_dict=nemo_gym_dict,
+        environment_path=environment_path,
     )
 
     nemo_gym_py_exec = get_actor_python_env("nemo_rl.environments.nemo_gym.NemoGym")

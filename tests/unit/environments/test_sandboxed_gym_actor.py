@@ -187,7 +187,9 @@ async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
     ]
     streamed = [
         item
-        async for item in actor.run_rollouts(examples, tokenizer=object(), timer_prefix="t")
+        async for item in actor.run_rollouts(
+            examples, tokenizer=object(), timer_prefix="t"
+        )
     ]
     assert streamed == [(7, {"post": 0.5}, streamed[0][2])]
     assert streamed[0][2] is not None
@@ -367,3 +369,69 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
         "resources_servers/math/configs/math.yaml"
     ]
     assert "sandboxed" not in created["cfg"]
+
+
+def test_spinup_nemo_gym_actor_threads_environment_path_to_the_colocated_actor(
+    monkeypatch,
+):
+    """Colocated runs need the environment package for the same two reasons mode B does.
+
+    ``environment_path`` is popped off the Gym config (it is a NeMo-RL key, not a Gym one)
+    and has to land on the actor config instead. Dropping it -- which is what happened
+    before -- leaves a colocated run with no search root for a native-v1 tree and no
+    wheel closure for a wheels-v1 one, and the platform driver deliberately installs
+    neither, so nothing else would put them there.
+    """
+    created = {}
+
+    class _FakeRemote:
+        def remote(self, cfg):
+            created["cfg"] = cfg
+            return SimpleNamespace(_spinup=SimpleNamespace(remote=lambda: "spin"))
+
+    class _FakeNemoGym:
+        @staticmethod
+        def options(**opts):
+            return _FakeRemote()
+
+    monkeypatch.setattr(
+        "nemo_rl.environments.nemo_gym.get_actor_python_env",
+        lambda fqn: "/bin/python",
+    )
+    monkeypatch.setattr("nemo_rl.environments.nemo_gym.ray.get", lambda ref: ref)
+    monkeypatch.setattr("nemo_rl.environments.nemo_gym.NemoGym", _FakeNemoGym)
+    monkeypatch.setattr(
+        "nemo_rl.environments.nemo_gym.get_nemo_gym_uv_cache_dir",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "nemo_rl.environments.nemo_gym.get_nemo_gym_venv_dir",
+        lambda: "/opt/gym_venvs",
+    )
+
+    from nemo_rl.environments.nemo_gym import spinup_nemo_gym_actor
+
+    spinup_nemo_gym_actor(
+        {
+            "nemo_gym": {
+                "sandboxed": False,
+                "environment_path": "/job/storage/environment",
+                "config_paths": ["/job/storage/environment/configs/agent.yaml"],
+            }
+        },
+        base_urls=["http://vllm.svc:8000/v1"],
+        model_name="model-x",
+        enable_router_replay=False,
+        routed_experts_dtype="int16",
+        use_fastokens=False,
+    )
+
+    assert created["cfg"]["environment_path"] == "/job/storage/environment"
+    # Popped, not forwarded: Gym's global config has no such key, and RunHelper walks
+    # every non-reserved top-level key looking for server blocks.
+    assert "environment_path" not in created["cfg"]["initial_global_config_dict"]
+    # The venv root has to reach Gym's config too, or install_environment_wheels cannot
+    # locate the per-server venvs and raises.
+    assert (
+        created["cfg"]["initial_global_config_dict"]["uv_venv_dir"] == "/opt/gym_venvs"
+    )
