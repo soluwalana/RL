@@ -17,13 +17,12 @@ from math import gcd
 from typing import Any
 
 import numpy as np
-import soundfile as sf
 from datasets import Dataset, load_dataset
 from huggingface_hub import snapshot_download
 from scipy.signal import resample_poly
 
 from nemo_rl.data.datasets.raw_dataset import RawDataset
-from nemo_rl.data.datasets.utils import get_huggingface_cache_path
+from nemo_rl.data.datasets.utils import get_huggingface_cache_path, read_audio
 
 DEFAULT_TEMPLATE = (
     "{question} Please choose the answer from the following options: {choices}. "
@@ -165,7 +164,7 @@ class AudioMCQDataset(RawDataset):
                 f"(source_dataset={source!r}, audio_path={audio_path!r})."
             )
 
-        audio_array, orig_sr = sf.read(absolute_path)
+        audio_array, orig_sr = read_audio(absolute_path)
 
         # Mono downmix for multi-channel waveforms before resampling.
         if audio_array.ndim > 1:

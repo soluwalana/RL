@@ -18,11 +18,11 @@ from math import gcd
 from typing import Any
 
 import numpy as np
-import soundfile as sf
 from datasets import Audio, Dataset, load_dataset
 from scipy.signal import resample_poly
 
 from nemo_rl.data.datasets.raw_dataset import RawDataset
+from nemo_rl.data.datasets.utils import read_audio
 
 DEFAULT_TEMPLATE = (
     "{question} Please choose the answer from the following options: {choices}. "
@@ -109,7 +109,7 @@ class AVQADataset(RawDataset):
 
     def format_data(self, data: dict[str, Any]) -> dict[str, Any]:
         audio_raw = data["audio"]
-        audio_array, orig_sr = sf.read(io.BytesIO(audio_raw["bytes"]))
+        audio_array, orig_sr = read_audio(io.BytesIO(audio_raw["bytes"]))
 
         # Resample to 16kHz if needed
         if orig_sr != 16000:

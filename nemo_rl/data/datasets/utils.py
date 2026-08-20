@@ -51,6 +51,25 @@ def load_audio_from_file(path: str, sampling_rate: int = 16000) -> np.ndarray:
     return waveform.squeeze(0).numpy().astype(np.float32)
 
 
+def read_audio(source: Union[str, io.BytesIO]) -> tuple[np.ndarray, int]:
+    """Read an audio file or buffer as ``(samples, sample_rate)``.
+
+    ``soundfile`` is imported lazily because it dlopens ``libsndfile`` at import
+    time, so images that strip the bundled codecs can still import the audio
+    dataset modules and run text-only training.
+    """
+    try:
+        import soundfile as sf
+    except (ImportError, OSError) as e:
+        raise RuntimeError(
+            "Reading audio requires the 'soundfile' package and its bundled "
+            "libsndfile library, which are unavailable in this environment. "
+            "Install them with `uv pip install --reinstall soundfile`."
+        ) from e
+
+    return sf.read(source)
+
+
 def assert_no_double_bos(token_ids: torch.Tensor, tokenizer: TokenizerType) -> None:
     """Assert that there are no double starting BOS tokens in the message.
 

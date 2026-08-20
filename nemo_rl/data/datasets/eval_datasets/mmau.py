@@ -18,10 +18,10 @@ import io
 from typing import Any
 
 import numpy as np
-import soundfile as sf
 from datasets import Audio, load_dataset
 
 from nemo_rl.data.datasets.response_datasets.avqa import _resample_audio
+from nemo_rl.data.datasets.utils import read_audio
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.processors import vlm_hf_data_processor
 
@@ -58,7 +58,7 @@ class MMAUDataset:
     def format_data(self, data: dict[str, Any]) -> dict[str, Any]:
         """Convert a raw MMAU item into messages format for vlm_hf_data_processor."""
         audio_raw = data["audio"]
-        audio_array, orig_sr = sf.read(io.BytesIO(audio_raw["bytes"]))
+        audio_array, orig_sr = read_audio(io.BytesIO(audio_raw["bytes"]))
 
         # Convert to mono if stereo
         if audio_array.ndim > 1:
