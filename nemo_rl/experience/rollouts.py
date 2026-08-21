@@ -2322,20 +2322,27 @@ def _nemo_gym_sample_metrics(
     """Per-sample rollout metrics, including whether generation was cut short.
 
     ``hit_max_tokens`` becomes ``final_batch["truncated"]``, which
-    ``grpo.overlong_filtering`` uses to drop a sample from the loss. A rollout can be
-    stopped by either of two budgets, so both are checked:
+    ``grpo.overlong_filtering`` uses to drop a sample from the loss.
 
-    * the conversation filled the context (``max_total_tokens``), or
-    * a single turn reached the per-turn generation cap (``max_new_tokens``).
+    Prefer the agent's own ``is_truncated``. It is the same ground truth the native
+    generation path uses -- the model server's ``finish_reason == "length"`` -- carried
+    through the agent, so it distinguishes "the budget stopped this" from "the model
+    emitted EOS" without knowing which budget applied. NeMo-Gym's ``verifiers_agent``
+    reports it; agents that do not simply omit the field.
 
-    Checking only the first misses every rollout that stopped below the context. That is
-    not a corner case: ``max_new_tokens`` is applied per turn, so a run with a small
-    ``max_new_tokens`` never fills the context at all and its truncated samples keep the
-    near-zero reward that overlong filtering exists to discard.
+    Fall back to comparing lengths when it is absent. A rollout can be stopped by either
+    of two budgets, so both are checked: the conversation filling the context
+    (``max_total_tokens``), or a single turn reaching the per-turn generation cap
+    (``max_new_tokens``). Checking only the first misses every rollout that stopped below
+    the context, which is not a corner case -- ``max_new_tokens`` applies per turn, so a
+    run with a small ``max_new_tokens`` never fills the context at all and its truncated
+    samples keep the near-zero reward that overlong filtering exists to discard.
 
-    Both comparisons are ``>=`` rather than ``==``. The message log is post-processed
-    before it reaches here -- reasoning content is re-wrapped in thinking tags, for one --
-    so an exact match can be thrown off by a single token.
+    The fallback compares with ``>=`` rather than ``==``. The message log is
+    post-processed before it reaches here -- reasoning content is re-wrapped in thinking
+    tags, for one -- so an exact match can be thrown off by a single token. It also
+    cannot tell a turn that ran out of budget from one that happened to emit EOS on the
+    final allowed token, which is why the reported flag wins when there is one.
     """
     message_log = result["message_log"]
     assistant_lengths = [
@@ -2344,9 +2351,13 @@ def _nemo_gym_sample_metrics(
     total_tokens = sum(len(m["token_ids"]) for m in message_log)
     max_gen_tokens_per_turn = max(assistant_lengths, default=0)
 
-    hit_max_tokens = total_tokens >= max_total_tokens
-    if max_new_tokens is not None:
-        hit_max_tokens = hit_max_tokens or max_gen_tokens_per_turn >= max_new_tokens
+    reported_truncated = (result.get("full_result") or {}).get("is_truncated")
+    if reported_truncated is not None:
+        hit_max_tokens = bool(reported_truncated)
+    else:
+        hit_max_tokens = total_tokens >= max_total_tokens
+        if max_new_tokens is not None:
+            hit_max_tokens = hit_max_tokens or max_gen_tokens_per_turn >= max_new_tokens
 
     return {
         "total_reward": result["full_result"]["reward"],

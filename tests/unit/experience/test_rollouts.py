@@ -1299,7 +1299,7 @@ def test_postprocess_nemo_gym_group_returns_task_index(log_full_result_tables):
     ) is log_full_result_tables
 
 
-def _gym_result(prompt_tokens, assistant_turns, reward=1.0):
+def _gym_result(prompt_tokens, assistant_turns, reward=1.0, is_truncated=None):
     message_log = [
         {
             "role": "user",
@@ -1316,10 +1316,13 @@ def _gym_result(prompt_tokens, assistant_turns, reward=1.0):
                 "generation_logprobs": torch.zeros(turn_tokens),
             }
         )
+    full_result = {"reward": reward}
+    if is_truncated is not None:
+        full_result["is_truncated"] = is_truncated
     return {
         "input_message_log": message_log[:1],
         "message_log": message_log,
-        "full_result": {"reward": reward},
+        "full_result": full_result,
     }
 
 
@@ -1347,6 +1350,28 @@ def test_nemo_gym_sample_metrics_detects_both_truncation_budgets(
     metrics = rollouts_mod._nemo_gym_sample_metrics(
         _gym_result(prompt_tokens, assistant_turns),
         max_total_tokens=max_total_tokens,
+        max_new_tokens=max_new_tokens,
+    )
+
+    assert metrics["hit_max_tokens"] is expected
+
+
+@pytest.mark.parametrize(
+    "reported,assistant_turns,max_new_tokens,expected",
+    [
+        # Reported flag wins over the length fallback in BOTH directions. The second case
+        # is the one lengths cannot get right: a turn that emitted EOS on its final
+        # allowed token looks identical to one that ran out of budget.
+        (True, [4], 64, True),
+        (False, [64], 64, False),
+    ],
+)
+def test_nemo_gym_sample_metrics_prefers_the_reported_flag(
+    reported, assistant_turns, max_new_tokens, expected
+):
+    metrics = rollouts_mod._nemo_gym_sample_metrics(
+        _gym_result(10, assistant_turns, is_truncated=reported),
+        max_total_tokens=1024,
         max_new_tokens=max_new_tokens,
     )
 
