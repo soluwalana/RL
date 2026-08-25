@@ -15,10 +15,13 @@
 """Trusted Ray proxy that runs NeMo-Gym inside a job-level sandbox."""
 
 import asyncio
+import atexit
 import concurrent.futures
 import http.client
 import json
 import logging
+import os
+import signal
 import time
 import urllib.error
 import urllib.request
@@ -369,7 +372,13 @@ def _gym_host_spec_from_config(
     )
 
 
-@ray.remote(max_restarts=-1, max_task_retries=-1)  # pragma: no cover
+# Deliberately no ``max_restarts``, for the same reason as
+# :class:`~nemo_rl.environments.sandbox.broker_actor.SandboxEpisodeBrokerActor`: the host handle
+# lives only in this process, so a restarted actor comes back unable to name the sandbox its
+# predecessor created. ``__init__`` then provisions a second one and the first survives to its
+# ttl_s, doubling the pods a job holds. A crash should fail the job instead. Restart support
+# needs label-based reconciliation of the JOB_ID_METADATA_KEY the host spec already stamps.
+@ray.remote  # pragma: no cover
 class SandboxedGymActor(EnvironmentInterface):
     """Trusted proxy that runs Gym rollouts inside an isolated job sandbox."""
 
@@ -378,6 +387,7 @@ class SandboxedGymActor(EnvironmentInterface):
         self._host_handle = None
         self._host_provider = None
         self._broker_actor = None
+        self._signal_cleanup_installed = False
         self._broker_endpoint = None
         self._rollout_timeout_s = 30 * 60.0
         self._max_request_bytes = 268_435_456
@@ -438,6 +448,7 @@ class SandboxedGymActor(EnvironmentInterface):
             sandbox.host_provider_options,
         )
         self._host_handle = _run_coro_sync(self._host_provider.create_host(host_spec))
+        self._install_termination_cleanup()
         try:
             _run_coro_sync(
                 self._host_provider.wait_ready(
@@ -448,6 +459,39 @@ class SandboxedGymActor(EnvironmentInterface):
             _run_coro_sync(self._host_provider.destroy_host(self._host_handle))
             self._host_handle = None
             raise
+
+    def _install_termination_cleanup(self) -> None:
+        """Destroy the host when this process exits without ``shutdown()`` being called.
+
+        Ray tears an actor's worker down without running any user teardown, so a job that is
+        cancelled, evicted or preempted otherwise leaves its sandbox running until ttl_s.
+        Kubernetes sends SIGTERM before SIGKILL, so a handler covers those paths; SIGKILL and
+        node loss cannot be, and stay ttl_s's job. Installed after ``create_host`` returns so
+        there is always a handle to destroy, and only once per actor.
+        """
+        if self._signal_cleanup_installed:
+            return
+        self._signal_cleanup_installed = True
+
+        atexit.register(self.shutdown)
+
+        def _terminate(signum: int, _frame: Any) -> None:
+            LOGGER.warning(
+                "received signal %s; destroying sandboxed Gym host before exit", signum
+            )
+            self.shutdown()
+            # Restore the default action and re-raise so the exit status still reports the
+            # signal -- swallowing it would make a cancelled job look like a clean stop.
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(signum, _terminate)
+            except ValueError:
+                # Ray may run the actor off the main thread, where signal handlers cannot be
+                # installed. atexit still covers interpreter shutdown.
+                LOGGER.debug("could not install %s handler off the main thread", signum)
 
     def _postprocess(
         self, nemo_gym_result: dict, tokenizer: PreTrainedTokenizerBase
