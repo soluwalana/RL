@@ -177,11 +177,20 @@ def _http_error(code: int, body: bytes):
     )
 
 
-def test_post_rollouts_classifies_proxy_cutoff_as_retryable(monkeypatch):
-    """A proxy 500 carries no error envelope, so it is transport and worth retrying."""
+def test_post_rollouts_classifies_proxy_timeout_as_terminal(monkeypatch):
+    """OpenSandbox's flat ``{"code","message"}`` is the proxy giving up, not a blip.
+
+    ``httpx.ReadTimeout`` stringifies to an empty message, which is exactly the 180s
+    cutoff: retrying it re-runs generation for the same wall time and fails the same way.
+    """
     from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
 
     actor = _chunking_actor(chunk_size=8, max_in_flight=8)
+    ticks = iter((0.0, 180.0))
+    monkeypatch.setattr(
+        "nemo_rl.environments.sandbox.nemo_gym_actor.time.monotonic",
+        lambda: next(ticks),
+    )
     monkeypatch.setattr(
         "urllib.request.urlopen",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -192,11 +201,47 @@ def test_post_rollouts_classifies_proxy_cutoff_as_retryable(monkeypatch):
     with pytest.raises(RolloutTransportError) as exc:
         actor._post_rollouts([{"ok": True}])
 
-    assert exc.value.retryable is True
+    assert exc.value.retryable is False
     assert exc.value.origin == "proxy"
     message = str(exc.value)
+    assert "GENERAL::UNKNOWN_ERROR" in message
     assert "http://host.svc/rollouts/run" in message
     assert "rollout_chunk_size" in message, "must say which knob to turn"
+
+
+def test_post_rollouts_classifies_unstructured_5xx_as_retryable(monkeypatch):
+    """HTML or an empty body is a dropped hop, not a decision the proxy already made."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+
+    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(
+            _http_error(502, b"<html>Bad Gateway</html>")
+        ),
+    )
+
+    with pytest.raises(RolloutTransportError) as exc:
+        actor._post_rollouts([{"ok": True}])
+
+    assert exc.value.retryable is True
+    assert exc.value.origin == "proxy"
+
+
+def test_sandbox_reported_error_ignores_the_proxy_envelope():
+    """The host's nested envelope and the proxy's flat one must not be interchangeable."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import (
+        _proxy_reported_error,
+        _sandbox_reported_error,
+    )
+
+    host = '{"error": {"code": "internal", "message": "KeyError"}}'
+    proxy = '{"code":"GENERAL::UNKNOWN_ERROR","message":""}'
+
+    assert _sandbox_reported_error(host) == "internal: KeyError"
+    assert _proxy_reported_error(host) is None
+    assert _sandbox_reported_error(proxy) is None
+    assert _proxy_reported_error(proxy) == "GENERAL::UNKNOWN_ERROR:"
 
 
 def test_post_rollouts_classifies_environment_failure_as_terminal(monkeypatch):
@@ -264,6 +309,29 @@ async def test_post_rollouts_chunked_does_not_retry_environment_failures(monkeyp
 
     assert calls == 1
     assert "failed after 1 attempt(s)" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_post_rollouts_chunked_does_not_retry_proxy_timeout(monkeypatch):
+    """A proxy timeout retried 3x is the same 180s, three times, then the step still fails."""
+    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=3)
+    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+
+    calls = 0
+
+    def _fake_open(*a, **k):
+        nonlocal calls
+        calls += 1
+        raise _http_error(500, b'{"code":"GENERAL::UNKNOWN_ERROR","message":""}')
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_open)
+
+    with pytest.raises(RolloutTransportError) as exc:
+        await actor._post_rollouts_chunked([{"_rowidx": 0}])
+
+    assert calls == 1
+    assert exc.value.retryable is False
+    assert "GENERAL::UNKNOWN_ERROR" in str(exc.value)
 
 
 @pytest.mark.asyncio
