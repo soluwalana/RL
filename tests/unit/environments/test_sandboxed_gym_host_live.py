@@ -14,19 +14,19 @@
 
 """Live OpenSandboxGymHostProvider tests.
 
-Gated behind ``LIVE_OPENSANDBOX=1``. Deployment targets are supplied only via
-environment variables (no cluster-specific defaults in-tree).
+Gated behind ``LIVE_OPENSANDBOX=1``. Deployment targets are supplied via
+environment variables.
 
 Required when gated on:
 
 * ``OPENSANDBOX_KUBE_CONTEXT`` — kubectl context
 * ``OPENSANDBOX_SERVER_SVC`` — OpenSandbox server Service name
 * ``OPENSANDBOX_API_SECRET`` — Secret holding the server API key (key ``api-key``)
-* ``OPENSANDBOX_WORKLOAD_NS`` — namespace where sandboxes and test PVCs are created
 * ``OPENSANDBOX_SYSTEM_NS`` — namespace of the server Service and API-key Secret
 
 Optional:
 
+* ``OPENSANDBOX_WORKLOAD_NS`` — sandboxes + test PVCs (default ``nmp-temp1``)
 * ``OPENSANDBOX_LIVE_STORAGE_CLASS`` — PVC storage class (cluster default if unset)
 * ``OPENSANDBOX_LIVE_STORAGE_ACCESS_MODE`` — PVC access mode (default ``ReadWriteOnce``)
 * ``OPENSANDBOX_LIVE_RUNTIME_IMAGE`` — sandbox image (default ``python:3.12-slim``)
@@ -105,12 +105,15 @@ class LiveTarget:
 @pytest.fixture
 def live_target() -> LiveTarget:
     expect = os.environ.get("OPENSANDBOX_EXPECT_RUNTIME_CLASS", "").strip()
+    workload_ns = (
+        os.environ.get("OPENSANDBOX_WORKLOAD_NS", "").strip() or "nmp-temp1"
+    )
     return LiveTarget(
         kube_context=_require_env("OPENSANDBOX_KUBE_CONTEXT"),
         system_ns=_require_env("OPENSANDBOX_SYSTEM_NS"),
         server_svc=_require_env("OPENSANDBOX_SERVER_SVC"),
         api_secret=_require_env("OPENSANDBOX_API_SECRET"),
-        workload_ns=_require_env("OPENSANDBOX_WORKLOAD_NS"),
+        workload_ns=workload_ns,
         expect_runtime_class=expect or None,
     )
 
