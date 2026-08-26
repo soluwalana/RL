@@ -57,6 +57,9 @@ RUNTIME_IMAGE = os.environ.get(
 )
 READY_TIMEOUT_S = float(os.environ.get("OPENSANDBOX_LIVE_READY_TIMEOUT_S", "1200"))
 
+# OpenSandbox BatchSandbox / PVC namespace on nemo-dev-blue (shared crun + kata).
+DEFAULT_WORKLOAD_NS = "nmp-temp1"
+
 # Real Gym bootstrap creates per-server venvs and therefore needs public package
 # registries. All policies remain default-deny; this switch adds only safe public
 # CIDRs and DNS suffixes. Set 0 once those venvs are prebaked.
@@ -136,12 +139,13 @@ class LiveTarget:
 
 def build_live_target() -> LiveTarget:
     expect = os.environ.get("OPENSANDBOX_EXPECT_RUNTIME_CLASS", "").strip()
+    workload_ns = os.environ.get("OPENSANDBOX_WORKLOAD_NS", "").strip() or DEFAULT_WORKLOAD_NS
     return LiveTarget(
         kube_context=require_env("OPENSANDBOX_KUBE_CONTEXT"),
         system_ns=require_env("OPENSANDBOX_SYSTEM_NS"),
         server_svc=require_env("OPENSANDBOX_SERVER_SVC"),
         api_secret=require_env("OPENSANDBOX_API_SECRET"),
-        workload_ns=require_env("OPENSANDBOX_WORKLOAD_NS"),
+        workload_ns=workload_ns,
         expect_runtime_class=expect or None,
     )
 

@@ -359,6 +359,30 @@ def test_gym_host_spec_carries_global_config_in_bootstrap():
     assert any(rule.host == "broker.svc.cluster.local" for rule in spec.egress_allow)
 
 
+def test_gym_host_spec_forwards_the_rollout_deadline():
+    """The host heartbeats a running rollout, so it is the only thing left to bound one.
+
+    Left unset it would fall back to its own default and silently disagree with the
+    timeout the caller is actually enforcing on the socket.
+    """
+    from nemo_rl.environments.sandbox.gym_host_runtime import ROLLOUT_DEADLINE_ENV_KEY
+    from nemo_rl.environments.sandbox.nemo_gym_actor import _gym_host_spec_from_config
+
+    cfg = _sandboxed_actor_cfg({})
+    cfg["sandboxed"]["sandbox"]["rollout_timeout_s"] = 900.0
+    sandboxed = NemoGymSandboxedConfig.model_validate(cfg["sandboxed"])
+    spec = _gym_host_spec_from_config(
+        cfg,
+        sandboxed,
+        "http://broker.svc.cluster.local:51234",
+        "token",
+        "broker.svc.cluster.local",
+        51234,
+    )
+
+    assert float(spec.bootstrap_env[ROLLOUT_DEADLINE_ENV_KEY]) == 900.0
+
+
 def test_sandbox_config_round_trip():
     cfg = SandboxConfig(
         image="runtime:dev",

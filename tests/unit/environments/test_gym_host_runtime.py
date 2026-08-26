@@ -54,6 +54,8 @@ def ready_server():
     runtime._ROLLOUT_HELPER = _FakeRolloutHelper()
     runtime.Handler.max_request_bytes = 1024
     runtime.Handler.max_response_bytes = 4096
+    runtime.Handler.heartbeat_interval_s = runtime._HEARTBEAT_INTERVAL_S
+    runtime.Handler.rollout_deadline_s = runtime._DEFAULT_ROLLOUT_DEADLINE_S
 
     server = HTTPServer(("127.0.0.1", 0), runtime.Handler)
     port = server.server_address[1]
@@ -67,6 +69,8 @@ def ready_server():
         runtime._READY = False
         runtime._HEAD_SERVER_CONFIG = None
         runtime._ROLLOUT_HELPER = None
+        runtime.Handler.heartbeat_interval_s = runtime._HEARTBEAT_INTERVAL_S
+        runtime.Handler.rollout_deadline_s = runtime._DEFAULT_ROLLOUT_DEADLINE_S
 
 
 def test_health_not_ready():
@@ -115,6 +119,88 @@ def test_rollouts_run_returns_results(ready_server):
     rowidx, result = body["results"][0]
     assert rowidx == 0
     assert result["reward"] == 0.0
+
+
+def test_rollouts_run_answers_before_the_batch_finishes(ready_server):
+    """The response must start flowing while the rollout is still running.
+
+    The sandbox proxy caps how long it waits for a first byte, so a batch that takes
+    longer than that cap is failed in transit however long the client is willing to
+    wait. Heartbeat whitespace is a valid JSON prefix, so it buys that time for free.
+    """
+    import urllib.request
+
+    runtime.Handler.heartbeat_interval_s = 0.02
+    runtime._ROLLOUT_HELPER = _FakeRolloutHelper({0: 0.3})
+
+    payload = json.dumps({"examples": [{"agent_ref": {"name": "a"}, "_rowidx": 0}]})
+    req = urllib.request.Request(
+        f"{ready_server}/rollouts/run",
+        data=payload.encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert resp.status == 200
+        # Absent means the body was length-delimited again, so nothing could precede it.
+        assert resp.headers.get("Content-Length") is None
+        raw = resp.read().decode()
+
+    assert raw.startswith(" "), "no heartbeat preceded the payload"
+    assert len(json.loads(raw)["results"]) == 1
+
+
+def test_rollouts_run_reports_a_failed_batch_in_the_body(ready_server):
+    """Past the status line only the body is left to carry a failure."""
+    import urllib.request
+
+    class _FailingHelper:
+        def run_examples(self, examples, head_server_config=None):
+            async def _one(row):
+                raise RuntimeError("environment exploded")
+
+            return [_one(row) for row in examples]
+
+    runtime._ROLLOUT_HELPER = _FailingHelper()
+
+    payload = json.dumps({"examples": [{"agent_ref": {"name": "a"}, "_rowidx": 0}]})
+    req = urllib.request.Request(
+        f"{ready_server}/rollouts/run",
+        data=payload.encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert resp.status == 200
+        body = json.loads(resp.read().decode())
+
+    assert body["error"]["code"] == "internal"
+    assert "environment exploded" in body["error"]["message"]
+
+
+def test_rollouts_run_gives_up_at_the_host_deadline(ready_server):
+    """With no hop left to time a rollout out, a wedged batch must still end.
+
+    Heartbeating removes every other deadline on this request, so the absence of one
+    here would let a hung rollout hold the connection until the sandbox's ttl_s.
+    """
+    import urllib.request
+
+    runtime.Handler.heartbeat_interval_s = 0.02
+    runtime.Handler.rollout_deadline_s = 0.1
+    runtime._ROLLOUT_HELPER = _FakeRolloutHelper({0: 30.0})
+
+    payload = json.dumps({"examples": [{"agent_ref": {"name": "a"}, "_rowidx": 0}]})
+    req = urllib.request.Request(
+        f"{ready_server}/rollouts/run",
+        data=payload.encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+
+    assert body["error"]["code"] == "deadline_exceeded"
 
 
 def test_rollouts_run_rejects_oversize_request(ready_server):

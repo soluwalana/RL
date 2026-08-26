@@ -63,7 +63,10 @@ from nemo_rl.environments.sandbox.host.models import (
     build_bootstrap_env,
     uv_env_passthrough,
 )
-from nemo_rl.environments.sandbox.gym_host_runtime import GYM_GLOBAL_CONFIG_ENV_KEY
+from nemo_rl.environments.sandbox.gym_host_runtime import (
+    GYM_GLOBAL_CONFIG_ENV_KEY,
+    ROLLOUT_DEADLINE_ENV_KEY,
+)
 from nemo_rl.environments.sandbox.host.provider import get_host_provider
 from nemo_rl.utils.timer import Timer
 
@@ -86,17 +89,23 @@ class RolloutTransportError(RuntimeError):
         self.origin = origin
 
 
-def _sandbox_reported_error(body: str) -> str | None:
-    """Return the Gym host's own error message from a response body, or None.
-
-    The host wraps its failures as ``{"error": {"code", "message"}}``; a failure in transit
-    has no such envelope. Distinguishes an environment error from a dropped connection.
-    """
+def _decode_json_object(body: str) -> Mapping | None:
     try:
         decoded = json.loads(body)
     except (ValueError, TypeError):
         return None
-    if not isinstance(decoded, Mapping):
+    return decoded if isinstance(decoded, Mapping) else None
+
+
+def _sandbox_reported_error(body: str) -> str | None:
+    """Return the Gym host's own error message from a response body, or None.
+
+    The host wraps its failures as ``{"error": {"code", "message"}}``. The OpenSandbox
+    proxy uses a *flat* ``{"code", "message"}`` instead, so looking only for this nested
+    envelope is what keeps a proxy timeout from being mistaken for an environment error.
+    """
+    decoded = _decode_json_object(body)
+    if decoded is None:
         return None
     error = decoded.get("error")
     if error is None:
@@ -105,6 +114,29 @@ def _sandbox_reported_error(body: str) -> str | None:
         code = error.get("code", "unknown")
         return f"{code}: {error.get('message', '')}".strip()
     return str(error)
+
+
+def _proxy_reported_error(body: str) -> str | None:
+    """Return the OpenSandbox proxy's own error from a response body, or None.
+
+    ``_normalize_error_detail`` emits a flat ``{"code", "message"}`` -- no nested
+    ``error`` key -- including when the proxy's 180s read timeout fires and
+    ``httpx.ReadTimeout`` stringifies to an empty message. That is a decision the
+    proxy already made, not a dropped connection: retrying it re-runs generation
+    for the same wall time and fails the same way.
+    """
+    decoded = _decode_json_object(body)
+    if decoded is None or "error" in decoded:
+        return None
+    code = decoded.get("code")
+    message = decoded.get("message")
+    if not isinstance(code, str):
+        return None
+    if message is None:
+        message = ""
+    if not isinstance(message, str):
+        return None
+    return f"{code}: {message}".strip()
 
 
 # Below this, a request cannot have been cut for staying open too long, so the host went
@@ -326,6 +358,10 @@ def _gym_host_spec_from_config(
             GYM_GLOBAL_CONFIG_ENV_KEY: json.dumps(
                 build_sandbox_global_config(cfg), sort_keys=True
             ),
+            # The host heartbeats a running rollout, so no hop between here and there
+            # will time one out any more. It needs its own deadline, and the caller's
+            # is the only one that matters.
+            ROLLOUT_DEADLINE_ENV_KEY: str(sandbox.rollout_timeout_s),
             **uv_env_passthrough(),
         },
     )
@@ -628,12 +664,24 @@ class SandboxedGymActor(EnvironmentInterface):
                     retryable=False,
                     origin="sandbox",
                 ) from exc
+            proxy_reported = _proxy_reported_error(error_body)
+            if proxy_reported is not None:
+                # The proxy answered with its own envelope, so it already gave up --
+                # typically the 180s read timeout. A retry repeats the same work.
+                raise RolloutTransportError(
+                    f"rollout POST was rejected by the sandbox proxy with HTTP {exc.code} "
+                    f"after {elapsed:.1f}s for {len(examples)} example(s) to "
+                    f"{self._host_handle.rollout_url}: {proxy_reported}; "
+                    f"{_transit_failure_hint(elapsed)}",
+                    retryable=False,
+                    origin="proxy",
+                ) from exc
             raise RolloutTransportError(
                 f"rollout POST was rejected in transit with HTTP {exc.code} after "
                 f"{elapsed:.1f}s for {len(examples)} example(s) to "
                 f"{self._host_handle.rollout_url}; {_transit_failure_hint(elapsed)}. "
                 f"Body: {error_body[:512]}",
-                # A 5xx with no host envelope came from in transit, so a retry may work.
+                # Unstructured 5xx (HTML, empty) is a dropped hop, so a retry may work.
                 retryable=exc.code >= 500,
                 origin="proxy",
             ) from exc
