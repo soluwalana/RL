@@ -960,3 +960,74 @@ class TestGetTrainContext:
             sequence_dim,
         ], "sequence_dim should be replicated for each buffer"
         assert len(call_kwargs["cp_seq_dims"]) == 3
+
+
+@pytest.mark.automodel
+@pytest.mark.skipif(not NEMO_AUTOMODEL_AVAILABLE, reason="nemo_automodel not available")
+class TestLoraMergeUnderActivationCheckpointing:
+    """LoRA must reach the inference engine when activation checkpointing is on.
+
+    checkpoint_wrapper strips ``_checkpoint_wrapped_module.`` from state_dict keys but
+    leaves it in named_modules(). Keying the module map on the raw name made every LoRA
+    lookup miss, so the refit streamed base weights while the trainer moved away from
+    them -- visible only as a slowly climbing train/token_mult_prob_error.
+    """
+
+    @staticmethod
+    def _lora_model(wrap: bool):
+        from nemo_automodel.components._peft.lora import LinearLoRA
+        from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+            checkpoint_wrapper,
+        )
+
+        class Block(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.up_proj = LinearLoRA(
+                    orig_linear=nn.Linear(8, 8, bias=False), dim=4, alpha=8
+                )
+
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = nn.ModuleList([Block()])
+
+        model = Model()
+        with torch.no_grad():
+            model.layers[0].up_proj.lora_A.weight.fill_(0.1)
+            model.layers[0].up_proj.lora_B.weight.fill_(0.1)
+        if wrap:
+            model.layers[0] = checkpoint_wrapper(model.layers[0])
+        return model
+
+    @pytest.mark.parametrize("activation_checkpointing", [False, True])
+    def test_lora_delta_reaches_refit_stream(self, activation_checkpointing):
+        model = self._lora_model(wrap=activation_checkpointing)
+        base = dict(model.state_dict())["layers.0.up_proj.weight"].clone()
+
+        streamed = dict(dtensor_params_generator(model, torch.float32))
+        merged = streamed["layers.0.up_proj.weight"]
+
+        # lora_B @ lora_A * (alpha/dim) with both filled at 0.1, dim=4, alpha=8
+        expected_delta = 4 * (0.1 * 0.1) * (8 / 4)
+        assert not torch.allclose(merged, base), (
+            "LoRA delta was not merged into the streamed weight; the inference engine "
+            "would generate from the base model."
+        )
+        torch.testing.assert_close(
+            merged - base,
+            torch.full_like(base, expected_delta),
+            rtol=1e-4,
+            atol=1e-4,
+        )
+
+    def test_unreachable_lora_module_raises(self):
+        from nemo_rl.models.policy.workers.dtensor_policy_worker_v2 import (
+            _assert_lora_modules_reachable,
+        )
+
+        model = self._lora_model(wrap=True)
+        # Simulate a wrapper this helper does not know how to undo.
+        bad_map = {"mangled.up_proj": model.layers[0]._checkpoint_wrapped_module.up_proj}
+        with pytest.raises(RuntimeError, match="could not be matched to a state_dict"):
+            _assert_lora_modules_reachable(bad_map, model.state_dict())
