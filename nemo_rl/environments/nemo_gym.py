@@ -642,6 +642,30 @@ def setup_nemo_gym_config(config, tokenizer) -> None:
     generation_config["stop_token_ids"] = None
 
 
+def apply_image_venv_defaults(nemo_gym_dict: dict[str, Any]) -> None:
+    """Point Gym at the image-baked uv cache/venvs and make its installs target them.
+
+    ``setdefault`` throughout: an explicit value in the job's own config wins.
+
+    ``uv_pip_set_python`` is the load-bearing one. Gym's ``uv pip install`` names no
+    target, so it resolves one from the environment. The training image sets
+    ``UV_PYTHON`` to an absolute path (``/opt/cpython/bin/python3.13``, needed so RL's
+    checked-in ``.python-version`` cannot pin an unpatched interpreter), and an absolute
+    ``UV_PYTHON`` outranks the venv Gym just activated. Installs then land in the
+    read-only interpreter tree and every Gym server dies with
+    ``Permission denied ... site-packages``, surfacing only as
+    ``Process 'policy_model' finished unexpectedly!``. Setting this makes Gym pass
+    ``--python <venv>/bin/python`` explicitly instead of inferring a target.
+    """
+    uv_cache_dir = get_nemo_gym_uv_cache_dir()
+    if uv_cache_dir is not None:
+        nemo_gym_dict.setdefault("uv_cache_dir", uv_cache_dir)
+    uv_venv_dir = get_nemo_gym_venv_dir()
+    if uv_venv_dir is not None:
+        nemo_gym_dict.setdefault("uv_venv_dir", uv_venv_dir)
+    nemo_gym_dict.setdefault("uv_pip_set_python", True)
+
+
 def spinup_nemo_gym_actor(
     env_configs: dict[str, Any],
     base_urls: list[Optional[str]],
@@ -741,14 +765,7 @@ def spinup_nemo_gym_actor(
         ray.get(actor._spinup.remote())
         return actor
 
-    # Pass prebuilt cache + venv dirs through the global config so the gym reuses
-    # image-baked venvs instead of rebuilding them.
-    uv_cache_dir = get_nemo_gym_uv_cache_dir()
-    if uv_cache_dir is not None:
-        nemo_gym_dict.setdefault("uv_cache_dir", uv_cache_dir)
-    uv_venv_dir = get_nemo_gym_venv_dir()
-    if uv_venv_dir is not None:
-        nemo_gym_dict.setdefault("uv_venv_dir", uv_venv_dir)
+    apply_image_venv_defaults(nemo_gym_dict)
 
     nemo_gym_cfg = NemoGymConfig(
         model_name=model_name,
