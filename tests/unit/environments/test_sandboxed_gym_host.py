@@ -447,3 +447,29 @@ def test_uv_env_passthrough_carries_no_credentials(monkeypatch):
     monkeypatch.setenv("NEMO_GYM_VENV_DIR", "/opt/gym_venvs")
 
     validate_bootstrap_env(uv_env_passthrough())
+
+
+def test_sandbox_global_config_targets_the_venv_for_installs():
+    """Gym's `uv pip install` must name the venv, not inherit UV_PYTHON.
+
+    The image pins UV_PYTHON to an absolute interpreter path so RL's checked-in
+    .python-version cannot select an unpatched CPython. An absolute UV_PYTHON outranks
+    the venv Gym just activated, so without this the sandbox's installs land in the
+    read-only interpreter tree and every Gym server dies with
+    "Permission denied ... site-packages" -- surfacing only as
+    "Process `policy_model` finished unexpectedly!".
+    """
+    from nemo_rl.environments.sandbox.nemo_gym_actor import build_sandbox_global_config
+
+    global_config = build_sandbox_global_config(_sandboxed_actor_cfg({}))
+    assert global_config["uv_pip_set_python"] is True
+
+
+def test_sandbox_global_config_respects_explicit_uv_pip_set_python():
+    """setdefault, not assignment: a job that sets this deliberately keeps its value."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import build_sandbox_global_config
+
+    global_config = build_sandbox_global_config(
+        _sandboxed_actor_cfg({"uv_pip_set_python": False})
+    )
+    assert global_config["uv_pip_set_python"] is False
