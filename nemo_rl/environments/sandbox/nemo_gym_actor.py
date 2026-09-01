@@ -296,6 +296,14 @@ def build_sandbox_global_config(cfg: SandboxedGymActorConfig) -> dict[str, Any]:
     # Writable dirs inside the job sandbox (image Gym tree is root-owned).
     global_config.setdefault("uv_cache_dir", gym_uv_cache_dir())
     global_config.setdefault("uv_venv_dir", gym_uv_venv_dir())
+    # Gym's `uv pip install` names no target, so it resolves one from the environment.
+    # The image sets UV_PYTHON to an absolute path (/opt/cpython/bin/python3.13, needed so
+    # RL's checked-in .python-version cannot pin an unpatched interpreter), and an absolute
+    # UV_PYTHON outranks the venv Gym just activated -- installs then land in the read-only
+    # interpreter tree and every server dies with "Permission denied ... site-packages",
+    # surfacing only as "Process `policy_model` finished unexpectedly!". This makes Gym pass
+    # `--python <venv>/bin/python` explicitly instead of inferring a target.
+    global_config.setdefault("uv_pip_set_python", True)
     return global_config
 
 
