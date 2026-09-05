@@ -239,6 +239,9 @@ class NemoGymSandboxedConfig(BaseModel):
     sandboxed: bool = False
     host_provider: str = "opensandbox"
     environment_path: str | None = None
+    # Whether that package vendors a complete dependency closure. Set by the platform, which
+    # owns the package format; forwarded to the host so uv resolves without an index.
+    environment_offline: bool = False
     sandbox: SandboxConfig | None = None
     job_id: str = DEFAULT_JOB_ID
     episode_broker: dict[str, Any] = Field(default_factory=dict)
