@@ -39,6 +39,8 @@ UV_FIND_LINKS_ENV_VAR = "UV_FIND_LINKS"
 UV_FIND_LINKS_SEPARATOR = ","
 # Makes uv ignore pyproject.toml / uv.toml discovery; honoured by every subcommand.
 UV_NO_CONFIG_ENV_VAR = "UV_NO_CONFIG"
+# --no-index has no env var; UV_OFFLINE is the only one uv exposes here.
+UV_OFFLINE_ENV_VAR = "UV_OFFLINE"
 # Gym's global-config key for the root the per-server venvs are built under.
 UV_VENV_DIR_KEY = "uv_venv_dir"
 # Server types that run user environment code. Model servers are excluded: they proxy to
@@ -102,15 +104,20 @@ def environment_wheels_dir(env_root: str | None) -> Path | None:
     return wheels_dir if wheels_dir.is_dir() and any(wheels_dir.glob("*.whl")) else None
 
 
-def configure_environment_wheelhouse(env_root: str | None) -> Path | None:
+def configure_environment_wheelhouse(env_root: str | None, *, offline: bool = False) -> Path | None:
     """Add an environment package's vendored wheels to uv's resolution sources.
 
     Must run before ``RunHelper.start``: Gym composes the per-server ``uv pip install``
-    itself, so uv's environment is the only way to reach it. Packages the wheelhouse does
-    not carry still resolve from a package index.
+    itself, so uv's environment is the only way to reach it.
+
+    ``offline`` also sets ``UV_OFFLINE``, for a wheelhouse the caller knows to be
+    self-sufficient. Without it, an index that is configured but unreachable makes uv fail to
+    resolve the ``uv venv --seed`` packages rather than fall back to ``--find-links``. The
+    caller decides, because a package can ship wheels and still need an index for its agent.
 
     Args:
         env_root: Staging directory of the environment package, or None/"" when there is none.
+        offline: Resolve from the wheelhouse and the uv cache only.
 
     Returns:
         The wheelhouse directory, or None when the package ships no wheels.
@@ -133,6 +140,17 @@ def configure_environment_wheelhouse(env_root: str | None) -> Path | None:
         f"NeMo Gym: environment wheelhouse -> {wheels_dir} "
         f"({len(list(wheels_dir.glob('*.whl')))} wheel(s))"
     )
+
+    if offline:
+        # An explicit operator setting wins.
+        if UV_OFFLINE_ENV_VAR in os.environ:
+            print(
+                f"NeMo Gym: offline requested, but {UV_OFFLINE_ENV_VAR}="
+                f"{os.environ[UV_OFFLINE_ENV_VAR]} is already set"
+            )
+        else:
+            os.environ[UV_OFFLINE_ENV_VAR] = "1"
+            print(f"NeMo Gym: offline wheelhouse, setting {UV_OFFLINE_ENV_VAR}=1")
     return wheels_dir
 
 

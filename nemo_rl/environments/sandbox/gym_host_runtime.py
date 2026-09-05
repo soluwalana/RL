@@ -46,6 +46,8 @@ from nemo_rl.environments.gym_env_package import (
 
 GYM_GLOBAL_CONFIG_ENV_KEY = "NMP_GYM_GLOBAL_CONFIG"
 ENVIRONMENT_PATH_ENV_KEY = "NMP_ENVIRONMENT_PATH"
+# Set by the platform, which knows whether the package vendors a complete closure.
+ENVIRONMENT_OFFLINE_ENV_KEY = "NMP_ENVIRONMENT_OFFLINE"
 UV_CACHE_DIR_KEY = "uv_cache_dir"
 # Mirrors DEFAULT_GYM_PORT_RANGE_{LOW,HIGH} in nemo_rl.distributed.virtual_cluster.
 DEFAULT_GYM_PORT_RANGE_LOW = 5000
@@ -190,7 +192,10 @@ def bootstrap_gym_host() -> tuple[Any, Any, Any]:
     # is the only way the wheelhouse reaches it, and the only way to keep the platform
     # workspace at WORKDIR from imposing its pins on the environment's venvs.
     isolate_uv_from_ambient_project()
-    configure_environment_wheelhouse(environment_path)
+    configure_environment_wheelhouse(
+        environment_path,
+        offline=os.environ.get(ENVIRONMENT_OFFLINE_ENV_KEY, "").strip().lower() in ("1", "true"),
+    )
 
     from nemo_gym.cli.env import RunHelper
     from nemo_gym.global_config import GlobalConfigDictParserConfig
