@@ -41,9 +41,6 @@ UV_FIND_LINKS_SEPARATOR = ","
 UV_NO_CONFIG_ENV_VAR = "UV_NO_CONFIG"
 # --no-index has no env var; UV_OFFLINE is the only one uv exposes here.
 UV_OFFLINE_ENV_VAR = "UV_OFFLINE"
-MANIFEST_FILENAME = "nemo-environment.yaml"
-# Formats promising a self-sufficient wheelhouse.
-OFFLINE_FORMATS = frozenset({"wheels-v1"})
 # Gym's global-config key for the root the per-server venvs are built under.
 UV_VENV_DIR_KEY = "uv_venv_dir"
 # Server types that run user environment code. Model servers are excluded: they proxy to
@@ -107,42 +104,20 @@ def environment_wheels_dir(env_root: str | None) -> Path | None:
     return wheels_dir if wheels_dir.is_dir() and any(wheels_dir.glob("*.whl")) else None
 
 
-def environment_format(env_root: str | None) -> str | None:
-    """Read the top-level ``format`` from the package manifest. None when unreadable.
-
-    Matched rather than parsed because this module is stdlib-only, so no YAML parser is
-    guaranteed. ``format`` is a required top-level scalar, which the anchored match relies on.
-    """
-    root = (env_root or "").strip()
-    if not root:
-        return None
-    manifest = Path(root) / MANIFEST_FILENAME
-    try:
-        text = manifest.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        match = re.match(r"^format\s*:\s*(.+)$", line)
-        if not match:
-            continue
-        value = match.group(1).split("#", 1)[0].strip()
-        return value.strip("\"'") or None
-    return None
-
-
-def configure_environment_wheelhouse(env_root: str | None) -> Path | None:
+def configure_environment_wheelhouse(env_root: str | None, *, offline: bool = False) -> Path | None:
     """Add an environment package's vendored wheels to uv's resolution sources.
 
     Must run before ``RunHelper.start``: Gym composes the per-server ``uv pip install``
     itself, so uv's environment is the only way to reach it.
 
-    ``wheels-v1`` additionally goes offline: with an index configured but unreachable, uv
-    fails to resolve the ``uv venv --seed`` packages instead of falling back to
-    ``--find-links``. Other formats still resolve what the wheelhouse lacks from an index --
-    ``adapter-wheels-v1`` needs GitHub for its agent harness.
+    ``offline`` also sets ``UV_OFFLINE``, for a wheelhouse the caller knows to be
+    self-sufficient. Without it, an index that is configured but unreachable makes uv fail to
+    resolve the ``uv venv --seed`` packages rather than fall back to ``--find-links``. The
+    caller decides, because a package can ship wheels and still need an index for its agent.
 
     Args:
         env_root: Staging directory of the environment package, or None/"" when there is none.
+        offline: Resolve from the wheelhouse and the uv cache only.
 
     Returns:
         The wheelhouse directory, or None when the package ships no wheels.
@@ -166,19 +141,16 @@ def configure_environment_wheelhouse(env_root: str | None) -> Path | None:
         f"({len(list(wheels_dir.glob('*.whl')))} wheel(s))"
     )
 
-    fmt = environment_format(env_root)
-    if fmt in OFFLINE_FORMATS:
+    if offline:
         # An explicit operator setting wins.
         if UV_OFFLINE_ENV_VAR in os.environ:
             print(
-                f"NeMo Gym: {fmt} package, but {UV_OFFLINE_ENV_VAR}="
+                f"NeMo Gym: offline requested, but {UV_OFFLINE_ENV_VAR}="
                 f"{os.environ[UV_OFFLINE_ENV_VAR]} is already set"
             )
         else:
             os.environ[UV_OFFLINE_ENV_VAR] = "1"
-            print(
-                f"NeMo Gym: {fmt} package, setting {UV_OFFLINE_ENV_VAR}=1"
-            )
+            print(f"NeMo Gym: offline wheelhouse, setting {UV_OFFLINE_ENV_VAR}=1")
     return wheels_dir
 
 

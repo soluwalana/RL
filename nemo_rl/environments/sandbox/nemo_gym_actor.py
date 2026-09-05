@@ -64,6 +64,7 @@ from nemo_rl.environments.sandbox.host.models import (
     uv_env_passthrough,
 )
 from nemo_rl.environments.sandbox.gym_host_runtime import (
+    ENVIRONMENT_OFFLINE_ENV_KEY,
     GYM_GLOBAL_CONFIG_ENV_KEY,
     ROLLOUT_DEADLINE_ENV_KEY,
 )
@@ -363,6 +364,7 @@ def _gym_host_spec_from_config(
         sandbox.max_response_bytes,
         dataset_path=dataset_path,
         extra={
+            ENVIRONMENT_OFFLINE_ENV_KEY: "1" if sandboxed.environment_offline else "0",
             GYM_GLOBAL_CONFIG_ENV_KEY: json.dumps(
                 build_sandbox_global_config(cfg), sort_keys=True
             ),

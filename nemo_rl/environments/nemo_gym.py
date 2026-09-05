@@ -132,6 +132,9 @@ class NemoGymConfig(TypedDict):
     # Gym's search root for native-v1 server trees, and the source of the vendored
     # wheels for wheels-v1 / adapter-wheels-v1. Absent for standalone NeMo-RL.
     environment_path: NotRequired[str | None]
+    # Whether that package vendors a complete closure, so uv can resolve without an index.
+    # Decided by the platform, which owns the package format; NeMo-RL only honours it.
+    environment_offline: NotRequired[bool]
 
 
 def _detect_invalid_tool_call_and_malformed_thinking(
@@ -221,7 +224,9 @@ class NemoGym(EnvironmentInterface):
         # is the only way the wheelhouse reaches it, and the only way to keep the platform
         # workspace at WORKDIR from imposing its pins on the environment's venvs.
         isolate_uv_from_ambient_project()
-        configure_environment_wheelhouse(environment_path)
+        configure_environment_wheelhouse(
+            environment_path, offline=bool(self.cfg.get("environment_offline", False))
+        )
 
         from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
         from nemo_gym.rollout_collection import RolloutCollectionHelper
