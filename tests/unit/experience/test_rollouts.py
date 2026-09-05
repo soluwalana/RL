@@ -1299,6 +1299,124 @@ def test_postprocess_nemo_gym_group_returns_task_index(log_full_result_tables):
     ) is log_full_result_tables
 
 
+def _gym_result(prompt_tokens, assistant_turns, reward=1.0, is_truncated=None):
+    message_log = [
+        {
+            "role": "user",
+            "content": "prompt",
+            "token_ids": torch.zeros(prompt_tokens, dtype=torch.long),
+        }
+    ]
+    for turn_tokens in assistant_turns:
+        message_log.append(
+            {
+                "role": "assistant",
+                "content": "answer",
+                "token_ids": torch.zeros(turn_tokens, dtype=torch.long),
+                "generation_logprobs": torch.zeros(turn_tokens),
+            }
+        )
+    full_result = {"reward": reward}
+    if is_truncated is not None:
+        full_result["is_truncated"] = is_truncated
+    return {
+        "input_message_log": message_log[:1],
+        "message_log": message_log,
+        "full_result": full_result,
+    }
+
+
+@pytest.mark.parametrize(
+    "prompt_tokens,assistant_turns,max_total_tokens,max_new_tokens,expected",
+    [
+        # The conversation filled the context. Detected before this check also
+        # considered the per-turn cap, and still detected now.
+        (10, [90], 100, None, True),
+        # A turn reached the generation cap well inside the context. This is the case
+        # that used to go unflagged, so overlong_filtering silently kept the sample.
+        (10, [64], 1024, 64, True),
+        # Neither budget reached: no single turn hits the cap, context has room left.
+        (10, [20, 20], 1024, 64, False),
+        # `>=`, not `==`: the message log is post-processed, so an exact match can be
+        # thrown off by a token or two.
+        (10, [95], 100, None, True),
+        # No generation cap configured: context check alone, matching prior behaviour.
+        (10, [64], 1024, None, False),
+    ],
+)
+def test_nemo_gym_sample_metrics_detects_both_truncation_budgets(
+    prompt_tokens, assistant_turns, max_total_tokens, max_new_tokens, expected
+):
+    metrics = rollouts_mod._nemo_gym_sample_metrics(
+        _gym_result(prompt_tokens, assistant_turns),
+        max_total_tokens=max_total_tokens,
+        max_new_tokens=max_new_tokens,
+    )
+
+    assert metrics["hit_max_tokens"] is expected
+
+
+@pytest.mark.parametrize(
+    "reported,assistant_turns,max_new_tokens,expected",
+    [
+        # Reported flag wins over the length fallback in BOTH directions. The second case
+        # is the one lengths cannot get right: a turn that emitted EOS on its final
+        # allowed token looks identical to one that ran out of budget.
+        (True, [4], 64, True),
+        (False, [64], 64, False),
+    ],
+)
+def test_nemo_gym_sample_metrics_prefers_the_reported_flag(
+    reported, assistant_turns, max_new_tokens, expected
+):
+    metrics = rollouts_mod._nemo_gym_sample_metrics(
+        _gym_result(10, assistant_turns, is_truncated=reported),
+        max_total_tokens=1024,
+        max_new_tokens=max_new_tokens,
+    )
+
+    assert metrics["hit_max_tokens"] is expected
+
+
+def test_nemo_gym_sample_metrics_reports_lengths():
+    metrics = rollouts_mod._nemo_gym_sample_metrics(
+        _gym_result(10, [30, 20], reward=2.5),
+        max_total_tokens=1024,
+        max_new_tokens=None,
+    )
+
+    assert metrics["total_reward"] == 2.5
+    assert metrics["assistant_tokens"] == 50
+    assert metrics["total_tokens"] == 60
+    assert metrics["turn_count"] == 1
+    assert metrics["max_gen_tokens_per_turn"] == 30
+
+
+def test_postprocess_nemo_gym_group_flags_generation_cap_truncation():
+    """final_batch["truncated"] is what grpo.overlong_filtering masks on."""
+    rows = [{"agent_ref": {"name": "agent"}} for _ in range(2)]
+    # First rollout stops at the generation cap; second finishes early. Neither comes
+    # close to max_model_len, so the context check alone would flag neither.
+    results = [_gym_result(10, [16]), _gym_result(10, [4])]
+
+    rollout_result = rollouts_mod._postprocess_single_nemo_gym_group(
+        nemo_gym_rows=rows,
+        results=results,
+        timer=rollouts_mod.Timer(),
+        timer_prefix="timing/rollout",
+        policy_generation=type(
+            "_PolicyGeneration",
+            (),
+            {"cfg": {"vllm_cfg": {"max_model_len": 1024}, "max_new_tokens": 16}},
+        )(),
+        input_batch=BatchedDataDict({"loss_multiplier": torch.ones(2)}),
+        tokenizer=type("_Tokenizer", (), {"pad_token_id": 0})(),
+        log_full_result_tables=False,
+    )
+
+    assert rollout_result.final_batch["truncated"].tolist() == [True, False]
+
+
 def test_run_nemo_gym_rollout_sync_drains_entire_batch(monkeypatch):
     input_batch = BatchedDataDict({"loss_multiplier": torch.ones(3)})
     expected = rollouts_mod.NemoGymRolloutResult(

@@ -2313,6 +2313,63 @@ def run_nemo_gym_rollout_sync(
     return asyncio.run(_consume_rollout())
 
 
+def _nemo_gym_sample_metrics(
+    result: dict,
+    *,
+    max_total_tokens: int,
+    max_new_tokens: Optional[int],
+) -> dict[str, Any]:
+    """Per-sample rollout metrics, including whether generation was cut short.
+
+    ``hit_max_tokens`` becomes ``final_batch["truncated"]``, which
+    ``grpo.overlong_filtering`` uses to drop a sample from the loss.
+
+    Prefer the agent's own ``is_truncated``. It is the same ground truth the native
+    generation path uses -- the model server's ``finish_reason == "length"`` -- carried
+    through the agent, so it distinguishes "the budget stopped this" from "the model
+    emitted EOS" without knowing which budget applied. NeMo-Gym's ``verifiers_agent``
+    reports it; agents that do not simply omit the field.
+
+    Fall back to comparing lengths when it is absent. A rollout can be stopped by either
+    of two budgets, so both are checked: the conversation filling the context
+    (``max_total_tokens``), or a single turn reaching the per-turn generation cap
+    (``max_new_tokens``). Checking only the first misses every rollout that stopped below
+    the context, which is not a corner case -- ``max_new_tokens`` applies per turn, so a
+    run with a small ``max_new_tokens`` never fills the context at all and its truncated
+    samples keep the near-zero reward that overlong filtering exists to discard.
+
+    The fallback compares with ``>=`` rather than ``==``. The message log is
+    post-processed before it reaches here -- reasoning content is re-wrapped in thinking
+    tags, for one -- so an exact match can be thrown off by a single token. It also
+    cannot tell a turn that ran out of budget from one that happened to emit EOS on the
+    final allowed token, which is why the reported flag wins when there is one.
+    """
+    message_log = result["message_log"]
+    assistant_lengths = [
+        len(m["token_ids"]) for m in message_log if m["role"] == "assistant"
+    ]
+    total_tokens = sum(len(m["token_ids"]) for m in message_log)
+    max_gen_tokens_per_turn = max(assistant_lengths, default=0)
+
+    reported_truncated = (result.get("full_result") or {}).get("is_truncated")
+    if reported_truncated is not None:
+        hit_max_tokens = bool(reported_truncated)
+    else:
+        hit_max_tokens = total_tokens >= max_total_tokens
+        if max_new_tokens is not None:
+            hit_max_tokens = hit_max_tokens or max_gen_tokens_per_turn >= max_new_tokens
+
+    return {
+        "total_reward": result["full_result"]["reward"],
+        "assistant_tokens": sum(assistant_lengths),
+        "total_tokens": total_tokens,
+        "turn_count": sum(1 for m in message_log if m["role"] == "user"),
+        "hit_max_tokens": hit_max_tokens,
+        # max_gen_tokens_per_turn: Diagnostic for long single generations
+        "max_gen_tokens_per_turn": max_gen_tokens_per_turn,
+    }
+
+
 def _postprocess_single_nemo_gym_group(
     nemo_gym_rows: list[dict],
     results: list[dict],
@@ -2359,28 +2416,15 @@ def _postprocess_single_nemo_gym_group(
             max_total_tokens_per_sample = policy_generation.cfg[
                 "max_total_sequence_length"
             ]
+        # Absent for backends whose generation config omits it; the context check then
+        # applies on its own, matching the previous behaviour.
+        max_new_tokens = policy_generation.cfg.get("max_new_tokens")
         all_sample_metrics = [
-            {
-                "total_reward": r["full_result"]["reward"],
-                "assistant_tokens": sum(
-                    len(m["token_ids"])
-                    for m in r["message_log"]
-                    if m["role"] == "assistant"
-                ),
-                "total_tokens": sum(len(m["token_ids"]) for m in r["message_log"]),
-                "turn_count": sum(1 for m in r["message_log"] if m["role"] == "user"),
-                "hit_max_tokens": sum(len(m["token_ids"]) for m in r["message_log"])
-                == max_total_tokens_per_sample,
-                # max_gen_tokens_per_turn: Diagnostic for long single generations
-                "max_gen_tokens_per_turn": max(
-                    (
-                        len(m["token_ids"])
-                        for m in r["message_log"]
-                        if m["role"] == "assistant"
-                    ),
-                    default=0,
-                ),
-            }
+            _nemo_gym_sample_metrics(
+                r,
+                max_total_tokens=max_total_tokens_per_sample,
+                max_new_tokens=max_new_tokens,
+            )
             for r in results
         ]
 
