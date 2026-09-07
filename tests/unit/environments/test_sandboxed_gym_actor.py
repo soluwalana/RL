@@ -26,6 +26,7 @@ import pytest
 
 from nemo_rl.environments.sandbox.config import BrokerEndpoint
 from nemo_rl.environments.sandbox.host.models import GymHostHandle
+from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
 
 
 def _sandbox_block():
@@ -97,50 +98,57 @@ class _FakeHostProvider:
         self.destroyed.append(handle.host_id)
 
 
-def test_post_rollouts_enforces_request_byte_limit():
-    actor = _actor_class().__new__(_actor_class())
+def _bare_actor(**overrides):
+    """Build an actor through its real ``__init__``, then override for the test.
+
+    ``__init__`` is pure attribute assignment -- no Ray, no broker, no network -- so
+    there is nothing to avoid by allocating with ``__new__`` and hand-setting a subset,
+    which is what these fixtures used to do. That is exactly what let them drift: when
+    ``__init__`` grew ``_rollout_max_attempts`` for the retry loop, the hand-built copies
+    did not, and every test reaching that loop failed with AttributeError instead of
+    testing anything. Constructing for real means a new attribute cannot be missed.
+    """
+    actor = _actor_class()(_actor_cfg())
     actor._host_handle = GymHostHandle(
         host_id="host-1",
         health_url="http://host.svc/health",
         rollout_url="http://host.svc/rollouts/run",
     )
-    actor._max_request_bytes = 32
+    # Test-scale limits. One attempt with no backoff keeps a failing rollout
+    # deterministic and stops a test from sleeping for the production default; the retry
+    # tests ask for more attempts explicitly.
+    actor._max_request_bytes = 1024
     actor._max_response_bytes = 1024
     actor._rollout_timeout_s = 1.0
+    actor._rollout_max_attempts = 1
+    actor._rollout_retry_backoff_s = 0.0
+    for key, value in overrides.items():
+        setattr(actor, key, value)
+    return actor
+
+
+def test_post_rollouts_enforces_request_byte_limit():
+    actor = _bare_actor(_max_request_bytes=32)
 
     with pytest.raises(ValueError, match="max_request_bytes"):
         actor._post_rollouts([{"payload": "x" * 64}])
 
 
 def test_post_rollouts_enforces_response_byte_limit(monkeypatch):
-    actor = _actor_class().__new__(_actor_class())
-    actor._host_handle = GymHostHandle(
-        host_id="host-1",
-        health_url="http://host.svc/health",
-        rollout_url="http://host.svc/rollouts/run",
-    )
-    actor._max_request_bytes = 1024
-    actor._max_response_bytes = 8
-    actor._rollout_timeout_s = 1.0
+    actor = _bare_actor(_max_response_bytes=8)
 
     monkeypatch.setattr(
         "urllib.request.urlopen",
         lambda *args, **kwargs: _FakeResponse(b'{"results":[1,2,3,4,5,6,7,8,9]}'),
     )
-    with pytest.raises(ValueError, match="max_response_bytes"):
+    # Not ValueError: an oversize response is a classified transport failure, tagged
+    # origin="client" so the caller knows the host is not at fault.
+    with pytest.raises(RolloutTransportError, match="max_response_bytes"):
         actor._post_rollouts([{"ok": True}])
 
 
 def test_post_rollouts_accepts_results_envelope(monkeypatch):
-    actor = _actor_class().__new__(_actor_class())
-    actor._host_handle = GymHostHandle(
-        host_id="host-1",
-        health_url="http://host.svc/health",
-        rollout_url="http://host.svc/rollouts/run",
-    )
-    actor._max_request_bytes = 1024
-    actor._max_response_bytes = 1024
-    actor._rollout_timeout_s = 1.0
+    actor = _bare_actor()
 
     payload = json.dumps({"results": [{"reward": 1.0}]}).encode("utf-8")
     monkeypatch.setattr(
@@ -151,20 +159,11 @@ def test_post_rollouts_accepts_results_envelope(monkeypatch):
 
 
 def _chunking_actor(chunk_size: int, max_in_flight: int, max_attempts: int = 1):
-    actor = _actor_class().__new__(_actor_class())
-    actor._host_handle = GymHostHandle(
-        host_id="host-1",
-        health_url="http://host.svc/health",
-        rollout_url="http://host.svc/rollouts/run",
+    return _bare_actor(
+        _rollout_chunk_size=chunk_size,
+        _rollout_max_in_flight=max_in_flight,
+        _rollout_max_attempts=max_attempts,
     )
-    actor._max_request_bytes = 1024
-    actor._max_response_bytes = 1024
-    actor._rollout_timeout_s = 1.0
-    actor._rollout_chunk_size = chunk_size
-    actor._rollout_max_in_flight = max_in_flight
-    actor._rollout_max_attempts = max_attempts
-    actor._rollout_retry_backoff_s = 0.0
-    return actor
 
 
 def _http_error(code: int, body: bytes):
@@ -459,19 +458,7 @@ def test_post_rollouts_error_reports_url_and_elapsed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
-    actor = _actor_class().__new__(_actor_class())
-    actor.cfg = {"use_fastokens": False}
-    actor._host_handle = GymHostHandle(
-        host_id="host-1",
-        health_url="http://host.svc/health",
-        rollout_url="http://host.svc/rollouts/run",
-    )
-    actor._max_request_bytes = 1024
-    actor._max_response_bytes = 1024
-    actor._rollout_timeout_s = 1.0
-    actor._rollout_chunk_size = 8
-    actor._rollout_max_in_flight = 8
-    actor._postprocess_cfg = {}
+    actor = _pairing_actor()
 
     monkeypatch.setattr(
         actor,
@@ -510,22 +497,7 @@ async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
 
 
 def _pairing_actor(**overrides):
-    actor = _actor_class().__new__(_actor_class())
-    actor.cfg = {"use_fastokens": False}
-    actor._host_handle = GymHostHandle(
-        host_id="host-1",
-        health_url="http://host.svc/health",
-        rollout_url="http://host.svc/rollouts/run",
-    )
-    actor._max_request_bytes = 1024
-    actor._max_response_bytes = 1024
-    actor._rollout_timeout_s = 1.0
-    actor._rollout_chunk_size = 8
-    actor._rollout_max_in_flight = 8
-    actor._postprocess_cfg = {}
-    for key, value in overrides.items():
-        setattr(actor, key, value)
-    return actor
+    return _bare_actor(cfg={"use_fastokens": False}, _postprocess_cfg={}, **overrides)
 
 
 def _patch_rollout_postprocess(monkeypatch, actor):
@@ -646,8 +618,7 @@ def test_spinup_starts_broker_and_creates_host(monkeypatch):
         lambda: SimpleNamespace(get_node_id=lambda: "node-1"),
     )
 
-    actor = _actor_class().__new__(_actor_class())
-    actor.__init__(_actor_cfg())
+    actor = _actor_class()(_actor_cfg())
     actor._spinup()
 
     assert len(fake_provider.created) == 1
@@ -666,7 +637,7 @@ def test_shutdown_destroys_host_then_broker(monkeypatch):
 
     monkeypatch.setattr("ray.get", lambda ref: ref)
 
-    actor = _actor_class().__new__(_actor_class())
+    actor = _bare_actor()
     actor._host_provider = fake_provider
     actor._host_handle = GymHostHandle(
         host_id="host-1",
@@ -722,6 +693,7 @@ def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
             "config_paths": ["resources_servers/math/configs/math.yaml"],
             "sandbox": _sandbox_block(),
             "job_id": "job-42",
+            "environment_offline": True,
             "invalid_tool_call_patterns": ["bad"],
             "thinking_tags": ["think"],
             "num_gpu_nodes": 0,
@@ -744,6 +716,14 @@ def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
     assert "sandboxed" not in created["cfg"]["initial_global_config_dict"]
     assert created["cfg"]["sandboxed"]["job_id"] == "job-42"
     assert created["cfg"]["invalid_tool_call_patterns"] == ["bad"]
+    # The sandboxed block is rebuilt from a fixed set of keys rather than forwarded, so
+    # a field the platform sets but this rebuild omits does not fail -- it silently
+    # takes the model default. environment_offline went that way: the compiled config
+    # said true, the sandbox got NMP_ENVIRONMENT_OFFLINE=0, and a wheels-v1 job reached
+    # for an index it was denied (nvbug 6716627). Same shape as environment_path below.
+    assert created["cfg"]["sandboxed"]["environment_offline"] is True
+    # Consumed here, so it must not travel on as a Gym config key either.
+    assert "environment_offline" not in created["cfg"]["initial_global_config_dict"]
 
 
 def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
@@ -781,6 +761,7 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
         {
             "nemo_gym": {
                 "sandboxed": False,
+                "environment_offline": True,
                 "config_paths": ["resources_servers/math/configs/math.yaml"],
             }
         },
@@ -796,6 +777,10 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
         "resources_servers/math/configs/math.yaml"
     ]
     assert "sandboxed" not in created["cfg"]
+    # NemoGymConfig declares environment_offline and _spinup reads it, but the
+    # constructor never passed it -- so the colocated path defaulted to online too.
+    assert created["cfg"]["environment_offline"] is True
+    assert "environment_offline" not in created["cfg"]["initial_global_config_dict"]
 
 
 def test_spinup_nemo_gym_actor_threads_environment_path_to_the_colocated_actor(

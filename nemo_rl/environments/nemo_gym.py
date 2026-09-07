@@ -717,6 +717,7 @@ def spinup_nemo_gym_actor(
     sandboxed_flag = bool(nemo_gym_dict.pop("sandboxed", False))
     host_provider = nemo_gym_dict.pop("host_provider", "opensandbox")
     environment_path = nemo_gym_dict.pop("environment_path", None)
+    environment_offline = bool(nemo_gym_dict.pop("environment_offline", False))
     sandbox_block = nemo_gym_dict.pop("sandbox", None)
     job_id = nemo_gym_dict.pop("job_id", None)
     episode_broker = nemo_gym_dict.pop("episode_broker", None) or {}
@@ -735,6 +736,7 @@ def spinup_nemo_gym_actor(
                 "sandboxed": True,
                 "host_provider": host_provider,
                 "environment_path": environment_path,
+                "environment_offline": environment_offline,
                 "sandbox": sandbox_block,
                 "job_id": job_id,
                 "episode_broker": episode_broker,
@@ -782,6 +784,7 @@ def spinup_nemo_gym_actor(
         use_fastokens=use_fastokens,
         initial_global_config_dict=nemo_gym_dict,
         environment_path=environment_path,
+        environment_offline=environment_offline,
     )
 
     nemo_gym_py_exec = get_actor_python_env("nemo_rl.environments.nemo_gym.NemoGym")
