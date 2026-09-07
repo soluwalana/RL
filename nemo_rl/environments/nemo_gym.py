@@ -2204,6 +2204,7 @@ def _build_gym_actor_config(
     # environment_path stays on NemoGymConfig so the colocated actor can register
     # the FileSet and install its wheels; it must not become a Gym server config.
     environment_path = nemo_gym_dict.pop("environment_path", None)
+    environment_offline = bool(nemo_gym_dict.pop("environment_offline", False))
     for key in (
         "sandboxed",
         "host_provider",
@@ -2256,6 +2257,7 @@ def _build_gym_actor_config(
         initial_global_config_dict=nemo_gym_dict,
         token_capture=token_capture,
         environment_path=environment_path,
+        environment_offline=environment_offline,
         **port_range,
         **multimodal_flags,
     )
@@ -2475,6 +2477,7 @@ def _build_sandboxed_gym_actor(
             "sandboxed": True,
             "host_provider": gym_dict.pop("host_provider", "opensandbox"),
             "environment_path": gym_dict.pop("environment_path", None),
+            "environment_offline": bool(gym_dict.pop("environment_offline", False)),
             "sandbox": gym_dict.pop("sandbox", None),
             "job_id": gym_dict.pop("job_id", None),
             "episode_broker": gym_dict.pop("episode_broker", None) or {},
