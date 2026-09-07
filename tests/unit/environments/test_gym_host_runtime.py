@@ -142,12 +142,194 @@ def test_rollouts_run_answers_before_the_batch_finishes(ready_server):
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         assert resp.status == 200
-        # Absent means the body was length-delimited again, so nothing could precede it.
+        # Chunked, not length-delimited: a length could not be known before the work
+        # finished, and nothing could precede the body if it were.
         assert resp.headers.get("Content-Length") is None
+        assert resp.headers.get("Transfer-Encoding") == "chunked"
         raw = resp.read().decode()
 
     assert raw.startswith(" "), "no heartbeat preceded the payload"
     assert len(json.loads(raw)["results"]) == 1
+
+
+def _raw_rollout_exchange(base_url: str, payload: str, version: str) -> bytes:
+    """POST /rollouts/run over a bare socket and return the response bytes as sent.
+
+    urllib de-chunks transparently, which is exactly the framing under test here, so
+    these assertions have to read the wire.
+    """
+    import socket
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(base_url)
+    body = payload.encode()
+    request = (
+        f"POST /rollouts/run {version}\r\n"
+        f"Host: {parsed.hostname}\r\n"
+        "Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "\r\n"
+    ).encode() + body
+
+    with socket.create_connection((parsed.hostname, parsed.port), timeout=10) as sock:
+        sock.sendall(request)
+        sock.settimeout(10)
+        received = b""
+        while not _body_is_complete(received):
+            part = sock.recv(4096)
+            if not part:
+                break
+            received += part
+    return received
+
+
+def _body_is_complete(received: bytes) -> bool:
+    """Whether the framing in ``received`` marks the body as finished."""
+    head, sep, body = received.partition(b"\r\n\r\n")
+    if not sep:
+        return False
+    if b"Transfer-Encoding: chunked" in head:
+        return body.endswith(b"0\r\n\r\n")
+    for line in head.split(b"\r\n"):
+        if line.lower().startswith(b"content-length:"):
+            return len(body) >= int(line.split(b":")[1])
+    return False
+
+
+def test_rollouts_run_frames_the_body_so_a_heartbeat_cannot_end_it(ready_server):
+    """The heartbeat and the payload must be separately framed chunks.
+
+    Regression guard for nvbug 6716627. The host used to flush the status line with
+    neither a length nor chunking, leaving the body delimited only by connection close.
+    The OpenSandbox proxy does not wait for that close: it returned HTTP 200 with the
+    lone " " heartbeat -- or nothing at all -- as the finished response, and the caller
+    failed with `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. Only the
+    zero-length chunk may end this body.
+    """
+    runtime.Handler.heartbeat_interval_s = 0.02
+    runtime._ROLLOUT_HELPER = _FakeRolloutHelper({0: 0.3})
+
+    payload = json.dumps({"examples": [{"agent_ref": {"name": "a"}, "_rowidx": 0}]})
+    received = _raw_rollout_exchange(ready_server, payload, "HTTP/1.1")
+
+    head, _, body = received.partition(b"\r\n\r\n")
+    assert b"Transfer-Encoding: chunked" in head
+    assert b"Content-Length" not in head
+    # The terminator, and nothing after it.
+    assert body.endswith(b"0\r\n\r\n")
+    # A heartbeat is its own chunk -- length-prefixed, so it cannot read as the end.
+    assert body.startswith(b"1\r\n \r\n")
+
+    # And the chunks still reassemble into the payload the caller expects.
+    decoded = ""
+    rest = body
+    while True:
+        size_line, _, rest = rest.partition(b"\r\n")
+        size = int(size_line, 16)
+        if size == 0:
+            break
+        decoded += rest[:size].decode()
+        rest = rest[size + 2 :]
+    assert len(json.loads(decoded)["results"]) == 1
+
+
+def test_rollouts_run_sends_a_length_to_an_http_10_caller(ready_server):
+    """A 1.0 caller cannot parse chunks, so it gets the whole body with a length.
+
+    Still explicitly framed -- that is the point. 1.0's own answer for a body of unknown
+    length is the close-delimited one that lost the response, so the host buffers instead
+    and pays for it in latency rather than in correctness.
+    """
+    runtime.Handler.heartbeat_interval_s = 0.02
+    runtime._ROLLOUT_HELPER = _FakeRolloutHelper({0: 0.1})
+
+    payload = json.dumps({"examples": [{"agent_ref": {"name": "a"}, "_rowidx": 0}]})
+    received = _raw_rollout_exchange(ready_server, payload, "HTTP/1.0")
+
+    head, _, body = received.partition(b"\r\n\r\n")
+    assert b"Transfer-Encoding" not in head
+    assert b"Content-Length: " in head
+    # Buffered whole, so no heartbeat leaked into a body that is now length-delimited.
+    assert not body.startswith(b" ")
+    assert len(json.loads(body.decode())["results"]) == 1
+
+
+def test_connections_are_never_reused(ready_server):
+    """1.1 is here for chunked framing only; its connection reuse is declined.
+
+    Reuse buys nothing -- a rollout runs for minutes -- and costs real hazards. The
+    sharp one: a request whose body the handler never reads (the 413 path declines on
+    purpose) leaves those bytes in the socket, and the server parses them as the next
+    request line. Pipelined here to prove it cannot happen: before the connection was
+    closed per request, this exact exchange answered
+    `400 Bad request syntax ('{"examples": ...}GET /health HTTP/1.1')` and swallowed the
+    real /health.
+    """
+    import socket
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(ready_server)
+    body = json.dumps(
+        {"examples": [{"agent_ref": {"name": "a"}, "_rowidx": 0}]}
+    ).encode()
+    pipelined = (
+        (
+            f"POST /rollouts/run HTTP/1.1\r\n"
+            f"Host: {parsed.hostname}\r\n"
+            "Content-Type: application/json\r\n"
+            # Oversize by declaration: the 413 check reads Content-Length, not the body.
+            f"Content-Length: {runtime.Handler.max_request_bytes + 1}\r\n"
+            "\r\n"
+        ).encode()
+        + body
+        + f"GET /health HTTP/1.1\r\nHost: {parsed.hostname}\r\n\r\n".encode()
+    )
+
+    with socket.create_connection((parsed.hostname, parsed.port), timeout=10) as sock:
+        sock.settimeout(10)
+        sock.sendall(pipelined)
+        received = b""
+        while True:
+            part = sock.recv(4096)
+            if not part:
+                break
+            received += part
+
+    assert received.startswith(b"HTTP/1.1 413")
+    # One response, and the leftover body was never parsed as a request of its own.
+    assert received.count(b"HTTP/1.1") == 1
+    assert b"Bad request" not in received
+    # Advertised, so a pooling proxy drops the socket instead of reusing it.
+    assert b"Connection: close" in received
+
+
+def test_the_rollout_response_declines_reuse_too(ready_server):
+    """The chunked path frames the body AND says the connection is done.
+
+    Both are needed: the zero-length chunk says where the body ends, Connection: close
+    says the socket is not to be kept. Neither substitutes for the other.
+    """
+    runtime.Handler.heartbeat_interval_s = 0.02
+    runtime._ROLLOUT_HELPER = _FakeRolloutHelper({0: 0.1})
+
+    payload = json.dumps({"examples": [{"agent_ref": {"name": "a"}, "_rowidx": 0}]})
+    received = _raw_rollout_exchange(ready_server, payload, "HTTP/1.1")
+
+    head, _, body = received.partition(b"\r\n\r\n")
+    assert b"Transfer-Encoding: chunked" in head
+    assert b"Connection: close" in head
+    assert body.endswith(b"0\r\n\r\n")
+
+
+def test_bodiless_responses_carry_a_length(ready_server):
+    """HTTP/1.1 keep-alive reuses the socket, so even a 404 must say where it ends."""
+    import urllib.error
+    import urllib.request
+
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        urllib.request.urlopen(f"{ready_server}/nope", timeout=10)
+    assert excinfo.value.code == 404
+    assert excinfo.value.headers.get("Content-Length") == "0"
 
 
 def test_rollouts_run_reports_a_failed_batch_in_the_body(ready_server):

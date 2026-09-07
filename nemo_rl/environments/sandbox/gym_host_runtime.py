@@ -67,6 +67,8 @@ _MAX_TRACEBACK_CHARS = 8_000
 # OpenSandbox build, not exposed in its config -- and one chunk of rollouts can outlast
 # that. Whitespace emitted while the work runs is a valid JSON prefix, so it costs the
 # reader nothing while proving to every hop in between that the response is still coming.
+# It travels as its own HTTP chunk: see Handler.protocol_version for why the framing, not
+# the whitespace, is the part that matters.
 _HEARTBEAT_INTERVAL_S = 15.0
 # With no hop left to time a rollout out, the host has to be the one that gives up: a
 # wedged batch would otherwise heartbeat until the sandbox's ttl_s.
@@ -194,7 +196,8 @@ def bootstrap_gym_host() -> tuple[Any, Any, Any]:
     isolate_uv_from_ambient_project()
     configure_environment_wheelhouse(
         environment_path,
-        offline=os.environ.get(ENVIRONMENT_OFFLINE_ENV_KEY, "").strip().lower() in ("1", "true"),
+        offline=os.environ.get(ENVIRONMENT_OFFLINE_ENV_KEY, "").strip().lower()
+        in ("1", "true"),
     )
 
     from nemo_gym.cli.env import RunHelper
@@ -289,31 +292,53 @@ def run_rollouts_sync(
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Framing, not features. A rollout body's length is not known when the status line
+    # has to leave, and HTTP/1.0 has no way to delimit such a body except by closing the
+    # connection -- so a proxy is free to treat the first bytes it sees as the whole
+    # response, which is how a lone " " heartbeat reached the caller as a finished body
+    # and failed to parse. Chunked is the delimiter, and it is 1.1-only.
+    #
+    # Only the framing is wanted from 1.1, not its other half: see parse_request, which
+    # declines connection reuse. Every response is still explicitly framed -- a
+    # Content-Length, or chunks closed by the zero-length chunk -- because that is the
+    # defect being fixed, not a keep-alive detail.
+    protocol_version = "HTTP/1.1"
+    # Set per request in do_POST; read by the heartbeat in _await_results.
+    _chunked: bool = False
     max_request_bytes: int = 268_435_456
     max_response_bytes: int = 268_435_456
     heartbeat_interval_s: float = _HEARTBEAT_INTERVAL_S
     rollout_deadline_s: float = _DEFAULT_ROLLOUT_DEADLINE_S
 
+    def parse_request(self) -> bool:
+        """Accept the request, then decline to reuse its connection.
+
+        1.1 is here for chunked framing alone. Reuse is its other half and this server
+        gains nothing from it -- a rollout runs for minutes, so a handshake per request
+        rounds to zero -- while it would add hazards for free: an unread request body
+        (the 413 path declines to read one on purpose, and a 256MB body is exactly what
+        it is declining) is what the server would parse as the next request line, and a
+        thread would be held per connection rather than per request.
+
+        Set here rather than in each handler so it also covers the request lines that
+        never reach one, and early enough for _announce_close to advertise it.
+        """
+        parsed = super().parse_request()
+        self.close_connection = True
+        return parsed
+
     def do_GET(self) -> None:
         if not self.path.startswith("/health"):
-            self.send_response(404)
-            self.end_headers()
+            self._send_empty(404)
             return
-        if not _READY:
-            body = json.dumps({"status": "starting"}).encode("utf-8")
-            self.send_response(503)
+        if _READY:
+            self._send_json(200, {"status": "ready"})
         else:
-            body = json.dumps({"status": "ready"}).encode("utf-8")
-            self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+            self._send_json(503, {"status": "starting"})
 
     def do_POST(self) -> None:
         if not self.path.startswith("/rollouts/run"):
-            self.send_response(404)
-            self.end_headers()
+            self._send_empty(404)
             return
         if not _READY or _HEAD_SERVER_CONFIG is None or _ROLLOUT_HELPER is None:
             self._send_json(
@@ -360,14 +385,30 @@ class Handler(BaseHTTPRequestHandler):
         # and no hop can mistake a long batch for a dead one. Everything that can be
         # judged from the request alone was rejected with a real status above; failures
         # from here on travel in the body as {"error": ...}, which the caller already
-        # treats as fatal. No Content-Length is sent: the body is delimited by the
-        # connection close HTTP/1.0 already implies, which is what allows the heartbeats
-        # below to precede a payload of unknown length.
+        # treats as fatal.
+        #
+        # Chunked buys both halves of that: the status line and the heartbeats go out
+        # before the work is done, while the zero-length chunk still marks where the body
+        # ends, so no hop can hand the caller a heartbeat as the finished response.
+        self._chunked = self.request_version >= "HTTP/1.1"
+        if not self._chunked:
+            # A 1.0 caller cannot parse chunks, and 1.0's own answer for a body of
+            # unknown length is the close-delimited one that lost the response in the
+            # first place. So buffer the whole rollout and send it with a length: no
+            # heartbeat, and the proxy's first-byte cap applies to the entire batch, but
+            # a late answer is a loud failure where a truncated one is a wrong reward.
+            self._send_body(200, self._await_results(future, started))
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Connection", "close")
+        self.send_header("Transfer-Encoding", "chunked")
+        self._announce_close()
         self.end_headers()
-        self.wfile.write(self._await_results(future, started))
+        self._write_chunk(self._await_results(future, started))
+        # Terminator. Only this ends the body.
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
 
     def _await_results(
         self, future: "concurrent.futures.Future[list[list]]", started: float
@@ -395,8 +436,10 @@ class Handler(BaseHTTPRequestHandler):
                 [future], timeout=min(self.heartbeat_interval_s, remaining)
             )
             if not done:
-                self.wfile.write(b" ")
-                self.wfile.flush()
+                # Nothing is on the wire yet on the buffered path, so there is nothing to
+                # heartbeat into; that caller waits for the whole body.
+                if self._chunked:
+                    self._write_chunk(b" ")
                 continue
 
             try:
@@ -434,13 +477,43 @@ class Handler(BaseHTTPRequestHandler):
     def _error_body(self, code: str, message: str) -> bytes:
         return json.dumps(_runtime_error(code, message)).encode("utf-8")
 
-    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload).encode("utf-8")
+    def _write_chunk(self, data: bytes) -> None:
+        """Emit one HTTP chunk. Empty writes are dropped: a zero-length chunk ends the body."""
+        if not data:
+            return
+        self.wfile.write(b"%X\r\n%s\r\n" % (len(data), data))
+        self.wfile.flush()
+
+    def _send_empty(self, status: int) -> None:
+        """Frame a bodiless response: zero bytes still has to say it is zero bytes.
+
+        Same principle as the rollout body above -- state where the response ends
+        instead of leaving the peer to infer it from the connection closing.
+        """
         self.send_response(status)
+        self._announce_close()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _announce_close(self) -> None:
+        """Tell the peer the connection is ending, rather than let it find out.
+
+        A pooling proxy told nothing here would return the socket to its pool and fail
+        on the next request it sent down it.
+        """
+        if self.close_connection:
+            self.send_header("Connection", "close")
+
+    def _send_body(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self._announce_close()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+        self._send_body(status, json.dumps(payload).encode("utf-8"))
 
     def log_message(self, format: str, *args: Any) -> None:
         return
