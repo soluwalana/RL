@@ -12,72 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trusted episode provisioning broker for sandboxed NeMo-Gym GRPO jobs.
+"""Sandboxed NeMo-Gym support for NeMo-RL.
 
-``SandboxEpisodeBrokerActor`` is intentionally not re-exported here: importing it pulls in Ray,
-and the HTTP surface, sanitizer, and backends are kept importable without a Ray cluster so they
-can be tested directly. Import it from
-:mod:`nemo_rl.environments.sandbox.broker_actor` instead.
+The broker, wire contract, egress policy and job-host orchestration live in the
+``sandboxed_gym`` package. Only :mod:`~nemo_rl.environments.sandbox.nemo_gym_actor`,
+the NeMo-RL adapter over it, remains here.
 """
-
-from nemo_rl.environments.sandbox.backends.base import (
-    EpisodeSandboxBackend,
-    SanitizedEpisodeSpec,
-    UnsupportedEpisodeOperationError,
-)
-from nemo_rl.environments.sandbox.config import BrokerEndpoint, EpisodeBrokerConfig
-from nemo_rl.environments.sandbox.egress import (
-    DEFAULT_PUBLIC_DNS_SUFFIXES,
-    EgressAllowlist,
-    EgressPolicy,
-    EgressRule,
-    build_egress_policy,
-    denied_cidrs,
-    local_resolver_addresses,
-)
-from nemo_rl.environments.sandbox.errors import BrokerRequestError
-from nemo_rl.environments.sandbox.host.models import (
-    GymHostEgressRule,
-    GymHostHandle,
-    GymHostSpec,
-    GymHostVolumeMount,
-    NemoGymSandboxedConfig,
-    SandboxConfig,
-)
-from nemo_rl.environments.sandbox.http_app import (
-    begin_shutdown,
-    build_broker_app,
-    close_all_episodes,
-)
-from nemo_rl.environments.sandbox.sanitize import (
-    sanitize_create_request,
-    sanitize_exec_request,
-)
-
-
-__all__ = [
-    "DEFAULT_PUBLIC_DNS_SUFFIXES",
-    "BrokerEndpoint",
-    "BrokerRequestError",
-    "EgressAllowlist",
-    "EgressPolicy",
-    "EgressRule",
-    "EpisodeBrokerConfig",
-    "EpisodeSandboxBackend",
-    "GymHostEgressRule",
-    "GymHostHandle",
-    "GymHostSpec",
-    "GymHostVolumeMount",
-    "NemoGymSandboxedConfig",
-    "SandboxConfig",
-    "SanitizedEpisodeSpec",
-    "UnsupportedEpisodeOperationError",
-    "begin_shutdown",
-    "build_broker_app",
-    "build_egress_policy",
-    "denied_cidrs",
-    "local_resolver_addresses",
-    "close_all_episodes",
-    "sanitize_create_request",
-    "sanitize_exec_request",
-]

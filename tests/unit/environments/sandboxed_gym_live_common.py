@@ -28,9 +28,9 @@ from urllib.parse import urlparse
 
 import pytest
 
-from nemo_rl.environments.sandbox.host.entrypoint import (
+from nemo_rl.environments.sandbox.nemo_gym_actor import (
     SANDBOXED_GYM_ACTOR_VENV as NEMO_RL_IMAGE_GYM_VENV,
-    default_gym_host_entrypoint,
+    nemo_rl_gym_host_entrypoint,
 )
 
 
@@ -44,7 +44,7 @@ NEMO_RL_IMAGE_VENV = NEMO_RL_IMAGE_GYM_VENV  # back-compat alias for live helper
 REAL_GYM_SANDBOX_RESOURCES = {"cpu": "2", "memory": "8Gi"}
 STUB_SANDBOX_RESOURCES = {"cpu": "250m", "memory": "512Mi"}
 
-# Host image candidates. Real Gym hosts use ``default_gym_host_entrypoint``
+# Host image candidates. Real Gym hosts use ``nemo_rl_gym_host_entrypoint``
 # (SandboxedGymActor venv + writable Gym copy). Override with
 # ``OPENSANDBOX_LIVE_RUNTIME_IMAGE``. Default stays slim+stub for host-provider
 # plumbing tests that do not need a real Gym tree.
@@ -287,7 +287,7 @@ def stub_entrypoint() -> list[str]:
 
 def real_gym_entrypoint() -> list[str]:
     """Start ``gym_host_runtime`` inside the NeMo-RL / nmp-rl-training image."""
-    return default_gym_host_entrypoint()
+    return nemo_rl_gym_host_entrypoint()
 
 
 def colocated_parity_global_config_dict() -> dict:

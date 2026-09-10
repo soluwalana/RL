@@ -54,13 +54,13 @@ from typing import Any
 
 import pytest
 
-from nemo_rl.environments.sandbox.host.models import (
+from sandboxed_gym.host.models import (
     GymHostEgressRule,
     GymHostHandle,
     GymHostSpec,
     GymHostVolumeMount,
 )
-from nemo_rl.environments.sandbox.host.opensandbox import OpenSandboxGymHostProvider
+from sandboxed_gym.host.opensandbox import OpenSandboxGymHostProvider
 
 
 pytestmark = [
