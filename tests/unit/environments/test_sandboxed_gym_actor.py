@@ -594,3 +594,31 @@ def test_spinup_nemo_gym_actor_threads_environment_path_to_the_colocated_actor(
     assert (
         created["cfg"]["initial_global_config_dict"]["uv_venv_dir"] == "/opt/gym_venvs"
     )
+
+
+def test_the_rebuild_forwards_every_field_the_package_declares():
+    """`spinup_nemo_gym_actor` rebuilds the sandboxed block from a hand-written key list.
+
+    A field the package declares and that list omits does not fail -- it silently takes the
+    model default, and the job runs with a setting the platform did not ask for. That has
+    happened twice: `environment_path`, then `environment_offline` (nvbug 6716627). This fails
+    when the package grows a field, which is the moment the list needs updating.
+    """
+    import inspect
+
+    from sandboxed_gym.host.models import NemoGymSandboxedConfig
+
+    from nemo_rl.environments import nemo_gym
+
+    source = inspect.getsource(nemo_gym.spinup_nemo_gym_actor)
+    rebuild = source[source.index("NemoGymSandboxedConfig.model_validate") :]
+
+    missing = [
+        field
+        for field in NemoGymSandboxedConfig.model_fields
+        if f'"{field}"' not in rebuild
+    ]
+    assert missing == [], (
+        f"the sandboxed block rebuild omits {missing}; those fields will silently take the "
+        f"model default instead of what the platform set"
+    )
