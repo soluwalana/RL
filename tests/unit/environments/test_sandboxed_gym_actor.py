@@ -1,32 +1,20 @@
-# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""Unit tests for the SandboxedGymActor adapter over the nemo-sandboxed-gym package.
 
-"""Unit tests for SandboxedGymActor rollout HTTP and factory selection."""
+Broker, transport and host provisioning are the package's; what is exercised here is the
+NeMo-RL side of the seam -- config translation, the ``_rowidx`` join, and the streaming
+postprocess.
+"""
 
-import io
-import json
-import threading
-import time
-import urllib.error
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+
+from sandboxed_gym.ray.broker_actor import RayEpisodeBroker
 
 import pytest
-
-from nemo_rl.environments.sandbox.config import BrokerEndpoint
-from nemo_rl.environments.sandbox.host.models import GymHostHandle
-from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+from sandboxed_gym.host.entrypoint import (
+    DEFAULT_GYM_WRITABLE_SRC,
+    gym_host_script_path,
+    gym_host_runtime_path,
+)
 
 
 def _sandbox_block():
@@ -62,442 +50,149 @@ def _actor_class():
     return SandboxedGymActor.__ray_metadata__.modified_class
 
 
-class _FakeResponse:
-    def __init__(self, payload: bytes):
-        self._payload = payload
+def _sandboxed_config(**overrides):
+    from sandboxed_gym.host.models import NemoGymSandboxedConfig
 
-    def read(self) -> bytes:
-        return self._payload
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-
-class _FakeHostProvider:
-    def __init__(self):
-        self.created = []
-        self.ready = []
-        self.destroyed = []
-
-    async def create_host(self, spec):
-        self.created.append(spec)
-        return GymHostHandle(
-            host_id="host-1",
-            health_url="http://host.svc/health",
-            rollout_url="http://host.svc/rollouts/run",
-            provider=None,
-        )
-
-    async def wait_ready(self, handle, timeout_s):
-        self.ready.append((handle.host_id, timeout_s))
-
-    async def destroy_host(self, handle):
-        self.destroyed.append(handle.host_id)
-
-
-def _bare_actor(**overrides):
-    """Build an actor through its real ``__init__``, then override for the test.
-
-    ``__init__`` is pure attribute assignment -- no Ray, no broker, no network -- so
-    there is nothing to avoid by allocating with ``__new__`` and hand-setting a subset,
-    which is what these fixtures used to do. That is exactly what let them drift: when
-    ``__init__`` grew ``_rollout_max_attempts`` for the retry loop, the hand-built copies
-    did not, and every test reaching that loop failed with AttributeError instead of
-    testing anything. Constructing for real means a new attribute cannot be missed.
-    """
-    actor = _actor_class()(_actor_cfg())
-    actor._host_handle = GymHostHandle(
-        host_id="host-1",
-        health_url="http://host.svc/health",
-        rollout_url="http://host.svc/rollouts/run",
-    )
-    # Test-scale limits. One attempt with no backoff keeps a failing rollout
-    # deterministic and stops a test from sleeping for the production default; the retry
-    # tests ask for more attempts explicitly.
-    actor._max_request_bytes = 1024
-    actor._max_response_bytes = 1024
-    actor._rollout_timeout_s = 1.0
-    actor._rollout_max_attempts = 1
-    actor._rollout_retry_backoff_s = 0.0
-    for key, value in overrides.items():
-        setattr(actor, key, value)
-    return actor
-
-
-def test_post_rollouts_enforces_request_byte_limit():
-    actor = _bare_actor(_max_request_bytes=32)
-
-    with pytest.raises(ValueError, match="max_request_bytes"):
-        actor._post_rollouts([{"payload": "x" * 64}])
-
-
-def test_post_rollouts_enforces_response_byte_limit(monkeypatch):
-    actor = _bare_actor(_max_response_bytes=8)
-
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *args, **kwargs: _FakeResponse(b'{"results":[1,2,3,4,5,6,7,8,9]}'),
-    )
-    # Not ValueError: an oversize response is a classified transport failure, tagged
-    # origin="client" so the caller knows the host is not at fault.
-    with pytest.raises(RolloutTransportError, match="max_response_bytes"):
-        actor._post_rollouts([{"ok": True}])
-
-
-def test_post_rollouts_accepts_results_envelope(monkeypatch):
-    actor = _bare_actor()
-
-    payload = json.dumps({"results": [{"reward": 1.0}]}).encode("utf-8")
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *args, **kwargs: _FakeResponse(payload),
-    )
-    assert actor._post_rollouts([{"ok": True}]) == [{"reward": 1.0}]
-
-
-def _chunking_actor(chunk_size: int, max_in_flight: int, max_attempts: int = 1):
-    return _bare_actor(
-        _rollout_chunk_size=chunk_size,
-        _rollout_max_in_flight=max_in_flight,
-        _rollout_max_attempts=max_attempts,
+    return NemoGymSandboxedConfig.model_validate(
+        {**_actor_cfg()["sandboxed"], **overrides}
     )
 
 
-def _http_error(code: int, body: bytes):
-    return urllib.error.HTTPError(
-        url="http://host.svc/rollouts/run",
-        code=code,
-        msg="err",
-        hdrs=None,
-        fp=io.BytesIO(body),
-    )
+class _FakeSession:
+    def __init__(self, results):
+        self._results = results
+        self.posted = []
+        self.shutdowns = 0
+        self.cfg = SimpleNamespace(sandbox=SimpleNamespace(rollout_chunk_size=8))
+        self.host = SimpleNamespace(rollout_url="http://host.svc/rollouts/run")
+
+    def run_rollouts(self, examples):
+        self.posted.append(examples)
+        return self._results(examples) if callable(self._results) else self._results
+
+    def shutdown(self):
+        self.shutdowns += 1
 
 
-def test_post_rollouts_classifies_proxy_timeout_as_terminal(monkeypatch):
-    """OpenSandbox's flat ``{"code","message"}`` is the proxy giving up, not a blip.
+def test_build_sandbox_global_config_injects_policy_and_drops_training_only_keys():
+    from nemo_rl.environments.sandbox.nemo_gym_actor import build_sandbox_global_config
 
-    ``httpx.ReadTimeout`` stringifies to an empty message, which is exactly the 180s
-    cutoff: retrying it re-runs generation for the same wall time and fails the same way.
-    """
-    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+    cfg = _actor_cfg()
+    cfg["initial_global_config_dict"] = {
+        "config_paths": ["/job/environment/env.yaml"],
+        "effort_levels": {"high": 1},
+    }
 
-    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
-    ticks = iter((0.0, 180.0))
-    monkeypatch.setattr(
-        "nemo_rl.environments.sandbox.nemo_gym_actor.time.monotonic",
-        lambda: next(ticks),
-    )
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **k: (_ for _ in ()).throw(
-            _http_error(500, b'{"code":"GENERAL::UNKNOWN_ERROR","message":""}')
-        ),
-    )
+    global_config = build_sandbox_global_config(cfg)
 
-    with pytest.raises(RolloutTransportError) as exc:
-        actor._post_rollouts([{"ok": True}])
-
-    assert exc.value.retryable is False
-    assert exc.value.origin == "proxy"
-    message = str(exc.value)
-    assert "GENERAL::UNKNOWN_ERROR" in message
-    assert "http://host.svc/rollouts/run" in message
-    assert "rollout_chunk_size" in message, "must say which knob to turn"
+    assert global_config["policy_model_name"] == "meta-llama/Llama-3.1-8B"
+    assert global_config["policy_base_url"] == cfg["base_urls"]
+    assert global_config["policy_api_key"] == "dummy_key"
+    assert global_config["config_paths"] == ["/job/environment/env.yaml"]
+    # Gym's servers reject this NeMo-RL-only knob.
+    assert "effort_levels" not in global_config
 
 
-def test_post_rollouts_classifies_unstructured_5xx_as_retryable(monkeypatch):
-    """HTML or an empty body is a dropped hop, not a decision the proxy already made."""
-    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
+def test_build_sandbox_global_config_honors_configured_port_range():
+    from nemo_rl.environments.sandbox.nemo_gym_actor import build_sandbox_global_config
 
-    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **k: (_ for _ in ()).throw(
-            _http_error(502, b"<html>Bad Gateway</html>")
-        ),
-    )
+    cfg = _actor_cfg()
+    cfg["port_range_low"] = 41000
+    cfg["port_range_high"] = 41100
 
-    with pytest.raises(RolloutTransportError) as exc:
-        actor._post_rollouts([{"ok": True}])
+    global_config = build_sandbox_global_config(cfg)
 
-    assert exc.value.retryable is True
-    assert exc.value.origin == "proxy"
+    assert global_config["port_range_low"] == 41000
+    assert global_config["port_range_high"] == 41100
 
 
-def test_sandbox_reported_error_ignores_the_proxy_envelope():
-    """The host's nested envelope and the proxy's flat one must not be interchangeable."""
+def test_build_serve_config_names_the_training_image_entrypoint():
+    """The package defaults to the runtime image's CMD; the training image has none."""
     from nemo_rl.environments.sandbox.nemo_gym_actor import (
-        _proxy_reported_error,
-        _sandbox_reported_error,
+        NEMO_RL_IMAGE_GIT_ROOT,
+        SANDBOXED_GYM_ACTOR_VENV,
+        build_serve_config,
+        nemo_rl_gym_host_entrypoint,
     )
 
-    host = '{"error": {"code": "internal", "message": "KeyError"}}'
-    proxy = '{"code":"GENERAL::UNKNOWN_ERROR","message":""}'
+    serve_cfg = build_serve_config(_actor_cfg(), _sandboxed_config())
 
-    assert _sandbox_reported_error(host) == "internal: KeyError"
-    assert _proxy_reported_error(host) is None
-    assert _sandbox_reported_error(proxy) is None
-    assert _proxy_reported_error(proxy) == "GENERAL::UNKNOWN_ERROR:"
-
-
-def test_post_rollouts_classifies_environment_failure_as_terminal(monkeypatch):
-    """The host's own {"error": ...} envelope means the environment raised. Retrying it
-    just burns generation time, and the message must carry the environment's own text."""
-    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
-
-    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
-    body = json.dumps(
-        {"error": {"code": "internal", "message": "KeyError: 'expected_answer'"}}
-    ).encode()
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **k: (_ for _ in ()).throw(_http_error(500, body)),
-    )
-
-    with pytest.raises(RolloutTransportError) as exc:
-        actor._post_rollouts([{"ok": True}])
-
-    assert exc.value.retryable is False
-    assert exc.value.origin == "sandbox"
-    assert "KeyError: 'expected_answer'" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_post_rollouts_chunked_retries_transport_failures(monkeypatch):
-    """One flaky chunk must not fail the step; 65 chunks make that likely, not rare."""
-    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=3)
-    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
-
-    attempts: dict[int, int] = {}
-
-    def _fake_post(chunk):
-        idx = chunk[0]["_rowidx"]
-        attempts[idx] = attempts.get(idx, 0) + 1
-        if idx == 1 and attempts[idx] < 3:
-            raise RolloutTransportError("cut off", retryable=True, origin="proxy")
-        return [(idx, {"reward": float(idx)})]
-
-    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
-
-    results = await actor._post_rollouts_chunked([{"_rowidx": i} for i in range(3)])
-
-    assert sorted(rowidx for rowidx, _ in results) == [0, 1, 2]
-    assert attempts == {0: 1, 1: 3, 2: 1}
-
-
-@pytest.mark.asyncio
-async def test_post_rollouts_chunked_does_not_retry_environment_failures(monkeypatch):
-    """A deterministic environment error retried 3x per chunk wastes a whole batch."""
-    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=3)
-    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
-
-    calls = 0
-
-    def _fake_post(chunk):
-        nonlocal calls
-        calls += 1
-        raise RolloutTransportError("env raised", retryable=False, origin="sandbox")
-
-    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
-
-    with pytest.raises(RolloutTransportError) as exc:
-        await actor._post_rollouts_chunked([{"_rowidx": 0}])
-
-    assert calls == 1
-    assert "failed after 1 attempt(s)" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_post_rollouts_chunked_does_not_retry_proxy_timeout(monkeypatch):
-    """A proxy timeout retried 3x is the same 180s, three times, then the step still fails."""
-    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=3)
-    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
-
-    calls = 0
-
-    def _fake_open(*a, **k):
-        nonlocal calls
-        calls += 1
-        raise _http_error(500, b'{"code":"GENERAL::UNKNOWN_ERROR","message":""}')
-
-    monkeypatch.setattr("urllib.request.urlopen", _fake_open)
-
-    with pytest.raises(RolloutTransportError) as exc:
-        await actor._post_rollouts_chunked([{"_rowidx": 0}])
-
-    assert calls == 1
-    assert exc.value.retryable is False
-    assert "GENERAL::UNKNOWN_ERROR" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_post_rollouts_chunked_reports_how_many_chunks_failed(monkeypatch):
-    """The batch-level error has to say the scale, not just surface one chunk's message."""
-    actor = _chunking_actor(chunk_size=1, max_in_flight=4, max_attempts=1)
-    from nemo_rl.environments.sandbox.nemo_gym_actor import RolloutTransportError
-
-    def _fake_post(chunk):
-        if chunk[0]["_rowidx"] % 2:
-            raise RolloutTransportError("cut off", retryable=True, origin="proxy")
-        return [(chunk[0]["_rowidx"], {"reward": 0.0})]
-
-    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
-
-    with pytest.raises(RolloutTransportError) as exc:
-        await actor._post_rollouts_chunked([{"_rowidx": i} for i in range(4)])
-
-    message = str(exc.value)
-    assert "2 of 4 rollout chunk(s) failed" in message
-    assert "batch of 4 example(s)" in message
-
-
-@pytest.mark.asyncio
-async def test_post_rollouts_chunked_splits_and_preserves_order(monkeypatch):
-    """Chunking is a transport detail: results must come back in batch order."""
-    actor = _chunking_actor(chunk_size=3, max_in_flight=8)
-    seen: list[list[dict]] = []
-
-    def _fake_post(chunk):
-        seen.append(chunk)
-        return [{"idx": row["idx"]} for row in chunk]
-
-    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
-
-    examples = [{"idx": i} for i in range(7)]
-    results = await actor._post_rollouts_chunked(examples)
-
-    # Chunks are dispatched concurrently, so completion order is not defined -- only the
-    # partition and the order of the reassembled results are.
-    assert sorted(len(chunk) for chunk in seen) == [1, 3, 3]
-    assert sorted([row["idx"] for row in chunk] for chunk in seen) == [
-        [0, 1, 2],
-        [3, 4, 5],
-        [6],
+    assert serve_cfg.sandbox.entrypoint == nemo_rl_gym_host_entrypoint()
+    assert serve_cfg.sandbox.entrypoint == [
+        "/bin/sh",
+        gym_host_script_path(git_root=NEMO_RL_IMAGE_GIT_ROOT),
+        SANDBOXED_GYM_ACTOR_VENV,
+        NEMO_RL_IMAGE_GIT_ROOT,
+        DEFAULT_GYM_WRITABLE_SRC,
+        gym_host_runtime_path(git_root=NEMO_RL_IMAGE_GIT_ROOT),
     ]
-    assert [row["idx"] for row in results] == list(range(7))
 
 
-@pytest.mark.asyncio
-async def test_post_rollouts_chunked_bounds_in_flight(monkeypatch):
-    """Chunks run concurrently, but never more than max_in_flight at once."""
-    actor = _chunking_actor(chunk_size=1, max_in_flight=2)
-    in_flight = 0
-    peak = 0
-    lock = threading.Lock()
+def test_sandboxed_gym_actor_venv_tracks_the_actor_fqn():
+    """Ray names the worker venv after the FQN, and the sandbox runs out of that path."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import (
+        SANDBOXED_GYM_ACTOR_FQN,
+        SANDBOXED_GYM_ACTOR_VENV,
+    )
 
-    def _fake_post(chunk):
-        nonlocal in_flight, peak
-        with lock:
-            in_flight += 1
-            peak = max(peak, in_flight)
-        try:
-            time.sleep(0.02)
-            return list(chunk)
-        finally:
-            with lock:
-                in_flight -= 1
+    assert SANDBOXED_GYM_ACTOR_VENV.endswith(f"/{SANDBOXED_GYM_ACTOR_FQN}")
 
-    monkeypatch.setattr(actor, "_post_rollouts", _fake_post)
 
-    results = await actor._post_rollouts_chunked([{"idx": i} for i in range(6)])
+def test_build_serve_config_preserves_a_configured_entrypoint():
+    from nemo_rl.environments.sandbox.nemo_gym_actor import build_serve_config
 
-    assert len(results) == 6
-    assert peak > 1, "chunks should overlap rather than run strictly serially"
-    assert peak <= 2
+    sandbox = {**_sandbox_block(), "entrypoint": ["/bin/sh", "-c", "custom"]}
+    serve_cfg = build_serve_config(_actor_cfg(), _sandboxed_config(sandbox=sandbox))
+
+    assert serve_cfg.sandbox.entrypoint == ["/bin/sh", "-c", "custom"]
+
+
+def test_build_serve_config_forwards_policy_base_urls():
+    """They become the host's egress allowlist; a dropped one makes the sandbox unable to generate."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import build_serve_config
+
+    serve_cfg = build_serve_config(_actor_cfg(), _sandboxed_config())
+
+    assert serve_cfg.policy_base_urls == ("http://vllm-0.svc.cluster.local:8000/v1",)
+    assert serve_cfg.job_id == "job-1"
+
+
+def test_tag_examples_stamps_rowidx_without_touching_the_task_index():
+    """A prompt group shares one _ng_task_index, so the join key has to be a separate field."""
+    from sandboxed_gym.runtime.gym_host_runtime import SG_EXAMPLE_ID
+
+    from nemo_rl.environments.sandbox.nemo_gym_actor import _tag_examples
+
+    group = [{"_rowidx": 3, "_ng_task_index": 7}, {"_rowidx": 4, "_ng_task_index": 7}]
+    tagged = _tag_examples(group)
+
+    assert [row[SG_EXAMPLE_ID] for row in tagged] == [3, 4]
+    assert [row["_ng_task_index"] for row in tagged] == [7, 7]
+    # The caller's own rows keep the identity NeMo-RL reads after the rollout.
+    assert SG_EXAMPLE_ID not in group[0]
+
+
+def test_tag_examples_rejects_a_row_without_rowidx():
+    from nemo_rl.environments.sandbox.nemo_gym_actor import _tag_examples
+
+    with pytest.raises(RuntimeError, match="missing _rowidx"):
+        _tag_examples([{"agent_ref": {"name": "agent_a"}}])
 
 
 def test_reward_summary_flags_all_zero_rewards():
-    """An all-zero batch is the common misconfiguration; it must be visible in logs."""
     from nemo_rl.environments.sandbox.nemo_gym_actor import _reward_summary
 
-    assert "nonzero=0/3" in _reward_summary(
-        [{"reward": 0.0}, {"reward": 0.0}, {"reward": 0.0}]
-    )
-    summary = _reward_summary([{"reward": 1.0}, {"reward": 0.0}])
-    assert "nonzero=1/2" in summary
-    assert "mean=0.500" in summary
-    # The host may send (row, result) pairs rather than bare results.
-    assert "nonzero=1/1" in _reward_summary([({"meta": True}, {"reward": 1.0})])
-    # Absent rewards must not raise.
-    assert _reward_summary([{"no_reward": True}]) == "reward=n/a"
+    assert "nonzero=0/2" in _reward_summary([{"reward": 0.0}, {"reward": 0.0}])
+    assert "nonzero=1/2" in _reward_summary([{"reward": 0.0}, {"reward": 1.0}])
+    assert _reward_summary([{"no_reward": 1}]) == "reward=n/a"
 
 
-def test_rowidx_span_renders_chunk_range():
-    from nemo_rl.environments.sandbox.nemo_gym_actor import _rowidx_span
-
-    assert _rowidx_span([{"_rowidx": 8}, {"_rowidx": 15}]) == "8-15"
-    assert _rowidx_span([{}]) == "?"
-
-
-def test_post_rollouts_error_reports_url_and_elapsed(monkeypatch):
-    """A proxy failure must name the URL and how long it was held, not just the code."""
-    actor = _chunking_actor(chunk_size=8, max_in_flight=8)
-
-    def _raise(*args, **kwargs):
-        raise urllib.error.HTTPError(
-            url="http://host.svc/rollouts/run",
-            code=500,
-            msg="Internal Server Error",
-            hdrs=None,
-            fp=io.BytesIO(b'{"code":"GENERAL::UNKNOWN_ERROR"}'),
-        )
-
-    monkeypatch.setattr("urllib.request.urlopen", _raise)
-
-    with pytest.raises(RuntimeError) as exc:
-        actor._post_rollouts([{"ok": True}])
-
-    message = str(exc.value)
-    assert "http://host.svc/rollouts/run" in message
-    assert "1 example(s)" in message
-    assert "HTTP 500" in message
-
-
-@pytest.mark.asyncio
-async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
-    actor = _pairing_actor()
-
-    monkeypatch.setattr(
-        actor,
-        "_post_rollouts",
-        lambda examples: [(7, {"reward": 0.5})],
-    )
-    monkeypatch.setattr(
-        actor,
-        "_postprocess",
-        lambda result, tokenizer: {"post": result["reward"]},
-    )
-    monkeypatch.setattr(
-        "nemo_rl.environments.sandbox.nemo_gym_actor._has_nan_generation_logprobs",
-        lambda result: False,
-    )
-    monkeypatch.setattr(
-        "nemo_rl.utils.fastokens.maybe_patch_fastokens",
-        lambda enabled: None,
-    )
-
-    examples = [
-        {
-            "_rowidx": 7,
-            "agent_ref": {"name": "agent_a"},
-        }
-    ]
-    streamed = [
-        item
-        async for item in actor.run_rollouts(
-            examples, tokenizer=object(), timer_prefix="t"
-        )
-    ]
-    assert streamed == [(7, {"post": 0.5}, streamed[0][2])]
-    assert streamed[0][2] is not None
-    assert "t/await_results" in streamed[0][2]
-
-
-def _pairing_actor(**overrides):
-    return _bare_actor(cfg={"use_fastokens": False}, _postprocess_cfg={}, **overrides)
+def _rollout_actor(session):
+    actor = _actor_class().__new__(_actor_class())
+    actor.cfg = {"use_fastokens": False}
+    actor._session = session
+    actor._postprocess_cfg = {}
+    return actor
 
 
 def _patch_rollout_postprocess(monkeypatch, actor):
@@ -513,6 +208,32 @@ def _patch_rollout_postprocess(monkeypatch, actor):
     )
 
 
+async def _stream(actor, examples):
+    return [
+        item
+        async for item in actor.run_rollouts(
+            examples, tokenizer=object(), timer_prefix="t"
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
+    from sandboxed_gym.runtime.gym_host_runtime import SG_EXAMPLE_ID
+
+    session = _FakeSession([{SG_EXAMPLE_ID: 7, "reward": 0.5}])
+    actor = _rollout_actor(session)
+    _patch_rollout_postprocess(monkeypatch, actor)
+
+    examples = [{"_rowidx": 7, "agent_ref": {"name": "agent_a"}}]
+    streamed = await _stream(actor, examples)
+
+    assert streamed == [(7, {"post": 0.5}, streamed[0][2])]
+    assert "t/await_results" in streamed[0][2]
+    # The row went out tagged, which is what let the result come back joinable.
+    assert session.posted[0][0][SG_EXAMPLE_ID] == 7
+
+
 @pytest.mark.asyncio
 async def test_run_rollouts_pairs_by_rowidx_not_arrival_order(monkeypatch):
     """A result must reach the prompt it was generated for, whatever order it lands in.
@@ -522,26 +243,20 @@ async def test_run_rollouts_pairs_by_rowidx_not_arrival_order(monkeypatch):
     prompt's tokens and reward to another prompt's row -- silently, since the row set is
     still a bijection and no guard downstream can notice.
     """
-    actor = _pairing_actor()
+    from sandboxed_gym.runtime.gym_host_runtime import SG_EXAMPLE_ID
+
+    # Exactly reversed: every result lands in a slot belonging to a different prompt.
+    session = _FakeSession(
+        lambda examples: [
+            {SG_EXAMPLE_ID: row[SG_EXAMPLE_ID], "reward": float(row[SG_EXAMPLE_ID])}
+            for row in reversed(examples)
+        ]
+    )
+    actor = _rollout_actor(session)
     _patch_rollout_postprocess(monkeypatch, actor)
 
     examples = [{"_rowidx": i, "agent_ref": {"name": "agent_a"}} for i in range(4)]
-    # Exactly reversed: every result lands in a slot belonging to a different prompt.
-    monkeypatch.setattr(
-        actor,
-        "_post_rollouts",
-        lambda chunk: [
-            (row["_rowidx"], {"reward": float(row["_rowidx"])})
-            for row in reversed(chunk)
-        ],
-    )
-
-    streamed = [
-        item
-        async for item in actor.run_rollouts(
-            examples, tokenizer=object(), timer_prefix="t"
-        )
-    ]
+    streamed = await _stream(actor, examples)
 
     assert [(rowidx, result["post"]) for rowidx, result, _ in streamed] == [
         (0, 0.0),
@@ -552,107 +267,139 @@ async def test_run_rollouts_pairs_by_rowidx_not_arrival_order(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_rollouts_rejects_results_that_do_not_cover_the_batch(monkeypatch):
+async def test_run_rollouts_rejects_duplicate_task_indices(monkeypatch):
     """A host that drops or invents a row must fail, not shift every later pairing."""
-    actor = _pairing_actor()
+    from sandboxed_gym.runtime.gym_host_runtime import SG_EXAMPLE_ID
+
+    session = _FakeSession(
+        [
+            {SG_EXAMPLE_ID: 0, "reward": 0.0},
+            {SG_EXAMPLE_ID: 0, "reward": 1.0},
+            {SG_EXAMPLE_ID: 9, "reward": 2.0},
+        ]
+    )
+    actor = _rollout_actor(session)
     _patch_rollout_postprocess(monkeypatch, actor)
 
     examples = [{"_rowidx": i, "agent_ref": {"name": "agent_a"}} for i in range(3)]
-    monkeypatch.setattr(
-        actor,
-        "_post_rollouts",
-        lambda chunk: [
-            (0, {"reward": 0.0}),
-            (0, {"reward": 1.0}),
-            (9, {"reward": 2.0}),
-        ],
-    )
 
-    with pytest.raises(RuntimeError, match="duplicate _rowidx"):
-        [
-            item
-            async for item in actor.run_rollouts(
-                examples, tokenizer=object(), timer_prefix="t"
-            )
-        ]
+    with pytest.raises(RuntimeError, match="duplicate _sg_example_id"):
+        await _stream(actor, examples)
+
+
+@pytest.mark.asyncio
+async def test_run_rollouts_rejects_results_that_do_not_cover_the_batch(monkeypatch):
+    from sandboxed_gym.runtime.gym_host_runtime import SG_EXAMPLE_ID
+
+    session = _FakeSession(
+        [{SG_EXAMPLE_ID: 0, "reward": 0.0}, {SG_EXAMPLE_ID: 9, "reward": 1.0}]
+    )
+    actor = _rollout_actor(session)
+    _patch_rollout_postprocess(monkeypatch, actor)
+
+    examples = [{"_rowidx": i, "agent_ref": {"name": "agent_a"}} for i in range(2)]
+
+    with pytest.raises(RuntimeError, match="do not cover the batch"):
+        await _stream(actor, examples)
 
 
 @pytest.mark.asyncio
 async def test_run_rollouts_rejects_untagged_results(monkeypatch):
     """An untagged list is the shape that silently mispaired; it must not be accepted."""
-    actor = _pairing_actor()
+    session = _FakeSession([{"reward": 0.0}])
+    actor = _rollout_actor(session)
     _patch_rollout_postprocess(monkeypatch, actor)
 
     examples = [{"_rowidx": 0, "agent_ref": {"name": "agent_a"}}]
-    monkeypatch.setattr(actor, "_post_rollouts", lambda chunk: [{"reward": 0.0}])
 
     with pytest.raises(RuntimeError, match="untagged result"):
-        [
-            item
-            async for item in actor.run_rollouts(
-                examples, tokenizer=object(), timer_prefix="t"
-            )
-        ]
+        await _stream(actor, examples)
 
 
-def test_spinup_starts_broker_and_creates_host(monkeypatch):
-    fake_provider = _FakeHostProvider()
-    endpoint = BrokerEndpoint(
-        url="http://broker.svc.cluster.local:51234",
-        host="127.0.0.1",
-        port=51234,
-        token="tok",
-    )
-    broker_actor = MagicMock()
-
+def _patch_spinup(monkeypatch, started, cleanups, session):
     monkeypatch.setattr(
-        "nemo_rl.environments.sandbox.nemo_gym_actor.start_episode_broker",
-        lambda cfg, node_id=None: (broker_actor, endpoint),
+        "nemo_rl.environments.sandbox.nemo_gym_actor.SandboxedGymOrchestrator",
+        lambda: SimpleNamespace(
+            start=lambda cfg, *, broker=None: (
+                started.update(cfg=cfg, broker=broker),
+                session,
+            )[1]
+        ),
     )
     monkeypatch.setattr(
-        "nemo_rl.environments.sandbox.nemo_gym_actor.get_host_provider",
-        lambda name, options=None: fake_provider,
+        "nemo_rl.environments.sandbox.nemo_gym_actor.install_termination_cleanup",
+        cleanups.append,
     )
     monkeypatch.setattr(
-        "ray.get_runtime_context",
+        "nemo_rl.environments.sandbox.nemo_gym_actor.ray.get_runtime_context",
         lambda: SimpleNamespace(get_node_id=lambda: "node-1"),
     )
 
-    actor = _actor_class()(_actor_cfg())
+
+def test_spinup_starts_a_session_and_registers_cleanup(monkeypatch):
+    session = _FakeSession([])
+    started: dict = {}
+    cleanups: list = []
+    _patch_spinup(monkeypatch, started, cleanups, session)
+
+    actor = _actor_class().__new__(_actor_class())
+    actor.__init__(_actor_cfg())
     actor._spinup()
 
-    assert len(fake_provider.created) == 1
-    assert fake_provider.ready == [("host-1", pytest.approx(15 * 60))]
-    assert actor._host_handle.host_id == "host-1"
-    assert actor._broker_actor is broker_actor
-    hosts = [rule.host for rule in fake_provider.created[0].egress_allow]
-    assert "broker.svc.cluster.local" in hosts
-    assert "vllm-0.svc.cluster.local" in hosts
+    assert actor._session is session
+    assert started["cfg"].job_id == "job-1"
+    assert started["cfg"].sandbox.image == "runtime:dev"
+    assert cleanups == [actor.shutdown]
 
 
-def test_shutdown_destroys_host_then_broker(monkeypatch):
-    fake_provider = _FakeHostProvider()
-    broker_actor = MagicMock()
-    broker_actor.shutdown.remote.return_value = "ok"
+def test_spinup_hosts_the_broker_in_its_own_ray_actor(monkeypatch):
+    """The broker serves every episode `exec`; sharing this process's GIL is what we avoid.
 
-    monkeypatch.setattr("ray.get", lambda ref: ref)
+    Asserts a broker is supplied at all -- the orchestrator's default is in-process, so passing
+    nothing is a silent revert to it rather than an error anyone would notice.
+    """
+    started: dict = {}
+    _patch_spinup(monkeypatch, started, [], _FakeSession([]))
 
-    actor = _bare_actor()
-    actor._host_provider = fake_provider
-    actor._host_handle = GymHostHandle(
-        host_id="host-1",
-        health_url="http://host.svc/health",
-        rollout_url="http://host.svc/rollouts/run",
-    )
-    actor._broker_actor = broker_actor
-    actor._broker_endpoint = object()
+    actor = _actor_class().__new__(_actor_class())
+    actor.__init__(_actor_cfg())
+    actor._spinup()
+
+    assert isinstance(started["broker"], RayEpisodeBroker)
+    # Pinned to this actor's node, so the broker hop stays local.
+    assert started["broker"]._node_id == "node-1"
+
+
+def test_spinup_rejects_a_config_that_is_not_sandboxed():
+    actor = _actor_class().__new__(_actor_class())
+    cfg = _actor_cfg()
+    cfg["sandboxed"] = {"sandboxed": False}
+    actor.__init__(cfg)
+
+    with pytest.raises(ValueError, match="sandboxed=true"):
+        actor._spinup()
+
+
+def test_build_serve_config_honors_the_venv_override(monkeypatch):
+    """The sandbox runs whatever venv this names; a silently ignored override is unrunnable."""
+    from nemo_rl.environments.sandbox.nemo_gym_actor import build_serve_config
+
+    monkeypatch.setenv("SANDBOXED_GYM_VENV", "/opt/ray_venvs/custom")
+    serve_cfg = build_serve_config(_actor_cfg(), _sandboxed_config())
+
+    assert serve_cfg.sandbox.entrypoint[2] == "/opt/ray_venvs/custom"
+
+
+def test_shutdown_closes_the_session_once():
+    session = _FakeSession([])
+    actor = _actor_class().__new__(_actor_class())
+    actor._session = session
 
     actor.shutdown()
+    actor.shutdown()
 
-    assert fake_provider.destroyed == ["host-1"]
-    assert actor._host_handle is None
-    broker_actor.shutdown.remote.assert_called_once()
-    assert actor._broker_actor is None
+    assert session.shutdowns == 1
+    assert actor._session is None
 
 
 def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
@@ -716,11 +463,11 @@ def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
     assert "sandboxed" not in created["cfg"]["initial_global_config_dict"]
     assert created["cfg"]["sandboxed"]["job_id"] == "job-42"
     assert created["cfg"]["invalid_tool_call_patterns"] == ["bad"]
-    # The sandboxed block is rebuilt from a fixed set of keys rather than forwarded, so
-    # a field the platform sets but this rebuild omits does not fail -- it silently
-    # takes the model default. environment_offline went that way: the compiled config
-    # said true, the sandbox got NMP_ENVIRONMENT_OFFLINE=0, and a wheels-v1 job reached
-    # for an index it was denied (nvbug 6716627). Same shape as environment_path below.
+    # The sandboxed block is rebuilt from a fixed set of keys rather than forwarded, so a field
+    # the platform sets but the rebuild omits does not fail -- it silently takes the model
+    # default. environment_offline went that way: the compiled config said true, the sandbox got
+    # NMP_ENVIRONMENT_OFFLINE=0, and a wheels-v1 job reached for an index it was denied
+    # (nvbug 6716627).
     assert created["cfg"]["sandboxed"]["environment_offline"] is True
     # Consumed here, so it must not travel on as a Gym config key either.
     assert "environment_offline" not in created["cfg"]["initial_global_config_dict"]
@@ -777,8 +524,8 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
         "resources_servers/math/configs/math.yaml"
     ]
     assert "sandboxed" not in created["cfg"]
-    # NemoGymConfig declares environment_offline and _spinup reads it, but the
-    # constructor never passed it -- so the colocated path defaulted to online too.
+    # NemoGymConfig declares environment_offline and _spinup reads it, but the constructor
+    # never passed it -- so the colocated path defaulted to online too.
     assert created["cfg"]["environment_offline"] is True
     assert "environment_offline" not in created["cfg"]["initial_global_config_dict"]
 
@@ -846,4 +593,32 @@ def test_spinup_nemo_gym_actor_threads_environment_path_to_the_colocated_actor(
     # locate the per-server venvs and raises.
     assert (
         created["cfg"]["initial_global_config_dict"]["uv_venv_dir"] == "/opt/gym_venvs"
+    )
+
+
+def test_the_rebuild_forwards_every_field_the_package_declares():
+    """`spinup_nemo_gym_actor` rebuilds the sandboxed block from a hand-written key list.
+
+    A field the package declares and that list omits does not fail -- it silently takes the
+    model default, and the job runs with a setting the platform did not ask for. That has
+    happened twice: `environment_path`, then `environment_offline` (nvbug 6716627). This fails
+    when the package grows a field, which is the moment the list needs updating.
+    """
+    import inspect
+
+    from sandboxed_gym.host.models import NemoGymSandboxedConfig
+
+    from nemo_rl.environments import nemo_gym
+
+    source = inspect.getsource(nemo_gym.spinup_nemo_gym_actor)
+    rebuild = source[source.index("NemoGymSandboxedConfig.model_validate") :]
+
+    missing = [
+        field
+        for field in NemoGymSandboxedConfig.model_fields
+        if f'"{field}"' not in rebuild
+    ]
+    assert missing == [], (
+        f"the sandboxed block rebuild omits {missing}; those fields will silently take the "
+        f"model default instead of what the platform set"
     )
