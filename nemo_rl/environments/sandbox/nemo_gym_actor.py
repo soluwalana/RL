@@ -26,6 +26,7 @@ import logging
 import os
 from collections import Counter
 from collections.abc import AsyncGenerator, Mapping
+from functools import partial
 from typing import Any, NotRequired
 
 import ray
@@ -239,8 +240,13 @@ class SandboxedGymActor(EnvironmentInterface):
             "routed_experts_dtype": cfg.get("routed_experts_dtype", "int16"),
         }
 
-    def _spinup(self) -> None:
-        """Start the episode broker and provision the job Gym host."""
+    async def _spinup(self) -> None:
+        """Start the episode broker and provision the job Gym host.
+
+        ``start`` blocks in ``ray.get`` while the broker actor comes up. This actor is async
+        (``run_rollouts`` awaits), so that ``ray.get`` has to run off the event loop Ray uses
+        to deliver the broker's reply.
+        """
         sandboxed = self.cfg.get("sandboxed")
         if isinstance(sandboxed, Mapping):
             sandboxed = NemoGymSandboxedConfig.model_validate(sandboxed)
@@ -248,17 +254,21 @@ class SandboxedGymActor(EnvironmentInterface):
             raise ValueError("SandboxedGymActor requires env.nemo_gym.sandboxed=true")
 
         serve_cfg = build_serve_config(self.cfg, sandboxed)
-        self._session = SandboxedGymOrchestrator().start(
-            serve_cfg,
-            # Pinned to this actor's node so the hop stays local; the Gym host reaches it over
-            # HTTP regardless, and is never given a Ray handle.
-            broker=RayEpisodeBroker(
-                serve_cfg.broker_config(),
-                node_id=ray.get_runtime_context().get_node_id(),
-            ),
+        self._session = await asyncio.to_thread(
+            partial(
+                SandboxedGymOrchestrator().start,
+                serve_cfg,
+                # Pinned to this actor's node so the hop stays local; the Gym host reaches it
+                # over HTTP regardless, and is never given a Ray handle.
+                broker=RayEpisodeBroker(
+                    serve_cfg.broker_config(),
+                    node_id=ray.get_runtime_context().get_node_id(),
+                ),
+            )
         )
         # After start(), so a spinup that failed leaves nothing registered to destroy.
-        install_termination_cleanup(self.shutdown)
+        # atexit and signal handlers cannot await, so they take the blocking path.
+        install_termination_cleanup(self._shutdown_blocking)
 
     def _postprocess(
         self, nemo_gym_result: dict, tokenizer: PreTrainedTokenizerBase
@@ -347,11 +357,24 @@ class SandboxedGymActor(EnvironmentInterface):
 
             yield nemo_gym_row["_rowidx"], nemo_rl_result, timing_metrics
 
-    def shutdown(self) -> None:
-        """Destroy the job host, then stop the episode broker."""
-        if self._session is not None:
-            self._session.shutdown()
-            self._session = None
+    async def shutdown(self) -> None:
+        """Destroy the job host, then stop the episode broker.
+
+        Off this actor's event loop: session teardown ``ray.get``s the broker, and blocking
+        here would stall the loop that has to receive that reply.
+        """
+        await asyncio.to_thread(self._shutdown_blocking)
+
+    def _shutdown_blocking(self) -> None:
+        """Tear down from ``atexit`` and signal handlers, which cannot await.
+
+        Blocking here is fine. The process is already on its way out, so there is no event
+        loop progress left to stall.
+        """
+        session = self._session
+        self._session = None
+        if session is not None:
+            session.shutdown()
 
     def step(self, message_log_batch, metadata):
         raise NotImplementedError
