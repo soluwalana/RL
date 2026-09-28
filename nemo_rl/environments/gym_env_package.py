@@ -20,7 +20,7 @@ path, so ``native-v1`` server trees resolve by name, and the vendored ``wheels/`
 installed into the per-server venvs, which Gym builds from framework-only requirements.
 
 Shared by the colocated actor (:mod:`nemo_rl.environments.nemo_gym`) and the in-sandbox
-host (:mod:`nemo_rl.environments.sandbox.gym_host_runtime`). Imports only the standard
+host (:mod:`sandboxed_gym.runtime.gym_host_runtime`). Imports only the standard
 library: neither caller is guaranteed the sandbox package's dependencies.
 """
 

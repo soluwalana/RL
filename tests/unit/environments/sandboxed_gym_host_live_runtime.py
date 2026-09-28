@@ -81,10 +81,16 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 request = {}
             examples = request.get("examples") or []
-            results = [
-                _gym_result_for_example(example, i)
-                for i, example in enumerate(examples)
-            ]
+            # Mirrors sandboxed_gym.runtime.gym_host_runtime._with_row_identity. A stub that
+            # answered positionally would not stand in for the real host: the caller joins on
+            # the identity the host carries across, and would reject these as untagged.
+            results = []
+            for i, example in enumerate(examples):
+                result = _gym_result_for_example(example, i)
+                for key in ("_ng_task_index", "_ng_rollout_index", "_sg_example_id"):
+                    if key in example and result.get(key) is None:
+                        result[key] = example[key]
+                results.append(result)
             body = json.dumps(
                 {
                     "results": results,

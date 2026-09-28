@@ -47,15 +47,15 @@ from nemo_gym.sandbox.broker import (
     BROKER_URL_ENV,
 )
 
-from nemo_rl.environments.sandbox.broker_actor import start_episode_broker
-from nemo_rl.environments.sandbox.config import EpisodeBrokerConfig
-from nemo_rl.environments.sandbox.host.models import (
+from sandboxed_gym.config import EpisodeBrokerConfig
+from sandboxed_gym.host.models import (
     GymHostEgressRule,
     GymHostSpec,
     GymHostVolumeMount,
     build_bootstrap_env,
 )
-from nemo_rl.environments.sandbox.host.opensandbox import OpenSandboxGymHostProvider
+from sandboxed_gym.host.opensandbox import OpenSandboxGymHostProvider
+from sandboxed_gym.ray.broker_actor import start_episode_broker
 from sandboxed_gym_live_common import (
     DEFAULT_BROKER_HOST,
     DEFAULT_BROKER_PORT,

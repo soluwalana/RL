@@ -2465,7 +2465,7 @@ def _build_sandboxed_gym_actor(
     config. This actor takes the tokenizer per rollout, so spinup does not call
     ``set_tokenizer``.
     """
-    from nemo_rl.environments.sandbox.host.models import NemoGymSandboxedConfig
+    from sandboxed_gym.host.models import NemoGymSandboxedConfig
     from nemo_rl.environments.sandbox.nemo_gym_actor import (
         SANDBOXED_GYM_ACTOR_FQN,
         SandboxedGymActor,
