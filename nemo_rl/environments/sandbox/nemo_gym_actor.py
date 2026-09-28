@@ -55,6 +55,7 @@ from nemo_rl.environments.nemo_gym import (
     NemoGymConfig,
     _has_nan_generation_logprobs,
 )
+from nemo_rl.telemetry.instrumentation import accepts_trace_context
 from nemo_rl.utils.timer import Timer
 
 
@@ -233,6 +234,9 @@ class SandboxedGymActor(EnvironmentInterface):
     def __init__(self, cfg: SandboxedGymActorConfig) -> None:
         self.cfg = cfg
         self._session: SandboxedGymSession | None = None
+        # Installed by set_tokenizer at spinup. run_rollouts used to take the
+        # tokenizer as an argument, and the dispatcher no longer sends one.
+        self._tokenizer: PreTrainedTokenizerBase | None = None
         self._postprocess_cfg = {
             "invalid_tool_call_patterns": cfg.get("invalid_tool_call_patterns"),
             "thinking_tags": cfg.get("thinking_tags"),
@@ -270,8 +274,23 @@ class SandboxedGymActor(EnvironmentInterface):
         # atexit and signal handlers cannot await, so they take the blocking path.
         install_termination_cleanup(self._shutdown_blocking)
 
+    def set_tokenizer(self, tokenizer: PreTrainedTokenizerBase) -> None:
+        """Install the tokenizer ``run_rollouts`` postprocesses with.
+
+        Same contract as ``NemoGym.set_tokenizer``: once, at spinup, so Ray
+        does not deserialize a tokenizer on every rollout call. The dispatcher
+        passes ``(rows, timer_prefix, deduplicate_multimodal_data)`` and does
+        not send a tokenizer.
+        """
+        self._tokenizer = tokenizer
+
     def _postprocess(
-        self, nemo_gym_result: dict, tokenizer: PreTrainedTokenizerBase
+        self,
+        nemo_gym_row: dict,
+        nemo_gym_result: dict,
+        tokenizer: PreTrainedTokenizerBase,
+        *,
+        include_initial_multimodal_data: bool = True,
     ) -> dict:
         # ``NemoGym`` is a Ray actor class; postprocess helpers live on the
         # underlying Python class.
@@ -279,20 +298,35 @@ class SandboxedGymActor(EnvironmentInterface):
         helper = nemo_gym_cls.__new__(nemo_gym_cls)
         helper.cfg = self._postprocess_cfg
         return helper._postprocess_nemo_gym_to_nemo_rl_result(
-            nemo_gym_result, tokenizer
+            nemo_gym_row,
+            nemo_gym_result,
+            tokenizer,
+            include_initial_multimodal_data=include_initial_multimodal_data,
         )
 
+    @accepts_trace_context
     async def run_rollouts(
         self,
         nemo_gym_examples: list[dict],
-        tokenizer: PreTrainedTokenizerBase,
         timer_prefix: str,
-    ) -> AsyncGenerator[tuple[int, dict, dict | None], None]:
-        """POST examples to the job host and stream postprocessed results."""
+        deduplicate_multimodal_data: bool = False,
+        per_prompt: bool = False,
+    ) -> AsyncGenerator[tuple[int, dict, dict, dict | None], None]:
+        """POST examples to the job host and stream postprocessed results.
+
+        The signature matches ``NemoGym.run_rollouts``. ``per_prompt`` is accepted
+        so the shared dispatcher can pass it; this actor does not open its own span.
+        """
+        del per_prompt
         if not nemo_gym_examples:
             raise ValueError("NeMo-Gym rollout batch must not be empty")
         if self._session is None:
             raise RuntimeError("SandboxedGymActor._spinup has not completed")
+        if self._tokenizer is None:
+            raise RuntimeError(
+                "SandboxedGymActor.set_tokenizer must be called before run_rollouts"
+            )
+        tokenizer = self._tokenizer
 
         from nemo_rl.utils.fastokens import maybe_patch_fastokens
 
@@ -335,7 +369,12 @@ class SandboxedGymActor(EnvironmentInterface):
             nemo_gym_result = results_by_rowidx[nemo_gym_row["_rowidx"]]
 
             with timer.time(label=f"{timer_prefix}/postprocess_results"):
-                nemo_rl_result = self._postprocess(nemo_gym_result, tokenizer)
+                nemo_rl_result = self._postprocess(
+                    nemo_gym_row,
+                    nemo_gym_result,
+                    tokenizer,
+                    include_initial_multimodal_data=not deduplicate_multimodal_data,
+                )
                 if _has_nan_generation_logprobs(nemo_rl_result):
                     raise RuntimeError("Generation logprobs contain NaN")
 
@@ -355,7 +394,14 @@ class SandboxedGymActor(EnvironmentInterface):
             if counts_left[agent_name] <= 0:
                 counts_left.pop(agent_name)
 
-            yield nemo_gym_row["_rowidx"], nemo_rl_result, timing_metrics
+            # Same four-tuple as NemoGym: the merger unpacks
+            # (rowidx, resolved_agent_ref, result, timing_metrics).
+            yield (
+                nemo_gym_row["_rowidx"],
+                nemo_gym_row["agent_ref"],
+                nemo_rl_result,
+                timing_metrics,
+            )
 
     async def shutdown(self) -> None:
         """Destroy the job host, then stop the episode broker.

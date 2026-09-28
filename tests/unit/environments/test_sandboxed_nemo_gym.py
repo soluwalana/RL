@@ -159,11 +159,12 @@ def test_sandboxed_nemo_gym_sanity(
     sandboxed_tokenizer,
 ):
     """Sandboxed mirror of ``test_nemo_gym_sanity`` (real Gym host, live OpenSandbox)."""
+    ray.get(sandboxed_gym_actor.set_tokenizer.remote(sandboxed_tokenizer))
     actual = [None] * len(sandboxed_sanity_inputs)
     for result_ref in sandboxed_gym_actor.run_rollouts.options(
         num_returns="streaming"
-    ).remote(sandboxed_sanity_inputs, sandboxed_tokenizer, "timing/sandboxed"):
-        rowidx, result, _ = ray.get(result_ref)
+    ).remote(sandboxed_sanity_inputs, "timing/sandboxed"):
+        rowidx, _agent_ref, result, _timing = ray.get(result_ref)
         actual[rowidx] = result
 
     assert all(row is not None for row in actual)
