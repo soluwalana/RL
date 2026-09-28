@@ -724,7 +724,8 @@ def spinup_nemo_gym_actor(
     num_gpu_nodes = nemo_gym_dict.pop("num_gpu_nodes", 0)
 
     if sandboxed_flag:
-        from nemo_rl.environments.sandbox.host.models import NemoGymSandboxedConfig
+        from sandboxed_gym.host.models import NemoGymSandboxedConfig
+
         from nemo_rl.environments.sandbox.nemo_gym_actor import (
             SANDBOXED_GYM_ACTOR_FQN,
             SandboxedGymActor,

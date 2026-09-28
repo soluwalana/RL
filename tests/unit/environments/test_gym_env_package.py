@@ -15,7 +15,7 @@
 """Tests for the environment-package helpers shared by both Gym integration modes.
 
 Colocated (``nemo_rl.environments.nemo_gym``) and sandboxed
-(``nemo_rl.environments.sandbox.gym_host_runtime``) call the same functions, so the
+(``sandboxed_gym.runtime.gym_host_runtime``) call the same functions, so the
 behaviour is pinned once here and each caller's own module tests only cover its wiring.
 """
 

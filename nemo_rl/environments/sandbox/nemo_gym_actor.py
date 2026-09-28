@@ -12,25 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trusted Ray proxy that runs NeMo-Gym inside a job-level sandbox."""
+"""NeMo-RL adapter over the ``nemo-sandboxed-gym`` package.
+
+The broker, the job-host orchestration and the rollout transport all live in
+``sandboxed_gym``. What stays here is what that package deliberately does not know
+about: NeMo-RL's Gym config dialect, the training knobs injected into the Gym global
+config, the ``_rowidx`` row identity RL joins on, and the Gym-to-NeMo-RL result
+postprocessing behind :class:`~nemo_rl.environments.interfaces.EnvironmentInterface`.
+"""
 
 import asyncio
-import atexit
-import concurrent.futures
-import http.client
-import json
 import logging
 import os
-import signal
-import time
-import urllib.error
-import urllib.request
 from collections import Counter
-from collections.abc import AsyncGenerator, Coroutine, Mapping
-from typing import Any, NotRequired, TypeVar
-from urllib.parse import urlparse
+from collections.abc import AsyncGenerator, Mapping
+from typing import Any, NotRequired
 
 import ray
+from sandboxed_gym.host.entrypoint import default_gym_host_entrypoint
+from sandboxed_gym.host.models import (
+    NemoGymSandboxedConfig,
+    uv_env_passthrough,
+)
+from sandboxed_gym.orchestrator import (
+    SandboxedGymOrchestrator,
+    SandboxedGymSession,
+    install_termination_cleanup,
+)
+from sandboxed_gym.ray.broker_actor import RayEpisodeBroker
+from sandboxed_gym.runtime.gym_host_runtime import SG_EXAMPLE_ID
+from sandboxed_gym.serve_config import SandboxedGymServeConfig
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.distributed.virtual_cluster import (
@@ -43,32 +54,6 @@ from nemo_rl.environments.nemo_gym import (
     NemoGymConfig,
     _has_nan_generation_logprobs,
 )
-from nemo_rl.environments.sandbox.broker_actor import start_episode_broker
-from nemo_rl.environments.sandbox.config import EpisodeBrokerConfig
-from nemo_rl.environments.sandbox.host.entrypoint import (
-    default_gym_host_entrypoint,
-    gym_uv_cache_dir,
-    gym_uv_venv_dir,
-)
-from nemo_rl.environments.sandbox.host.models import (
-    DEFAULT_ROLLOUT_CHUNK_SIZE,
-    DEFAULT_ROLLOUT_MAX_ATTEMPTS,
-    DEFAULT_ROLLOUT_MAX_IN_FLIGHT,
-    DEFAULT_ROLLOUT_RETRY_BACKOFF_S,
-    GymHostEgressRule,
-    GymHostSpec,
-    GymHostVolumeMount,
-    NemoGymSandboxedConfig,
-    SandboxConfig,
-    build_bootstrap_env,
-    uv_env_passthrough,
-)
-from nemo_rl.environments.sandbox.gym_host_runtime import (
-    ENVIRONMENT_OFFLINE_ENV_KEY,
-    GYM_GLOBAL_CONFIG_ENV_KEY,
-    ROLLOUT_DEADLINE_ENV_KEY,
-)
-from nemo_rl.environments.sandbox.host.provider import get_host_provider
 from nemo_rl.utils.timer import Timer
 
 
@@ -77,177 +62,14 @@ LOGGER = logging.getLogger(__name__)
 # here would otherwise be dropped and a rollout would emit no progress at all.
 LOGGER.setLevel(logging.INFO)
 
-T = TypeVar("T")
-
-
-class RolloutTransportError(RuntimeError):
-    """A failed rollout POST, tagged with where it failed and whether a retry can help."""
-
-    def __init__(self, message: str, *, retryable: bool, origin: str) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-        # "proxy" (in transit), "sandbox" (the host reported it), or "client" (our own limits).
-        self.origin = origin
-
-
-def _decode_json_object(body: str) -> Mapping | None:
-    try:
-        decoded = json.loads(body)
-    except (ValueError, TypeError):
-        return None
-    return decoded if isinstance(decoded, Mapping) else None
-
-
-def _sandbox_reported_error(body: str) -> str | None:
-    """Return the Gym host's own error message from a response body, or None.
-
-    The host wraps its failures as ``{"error": {"code", "message"}}``. The OpenSandbox
-    proxy uses a *flat* ``{"code", "message"}`` instead, so looking only for this nested
-    envelope is what keeps a proxy timeout from being mistaken for an environment error.
-    """
-    decoded = _decode_json_object(body)
-    if decoded is None:
-        return None
-    error = decoded.get("error")
-    if error is None:
-        return None
-    if isinstance(error, Mapping):
-        code = error.get("code", "unknown")
-        return f"{code}: {error.get('message', '')}".strip()
-    return str(error)
-
-
-def _proxy_reported_error(body: str) -> str | None:
-    """Return the OpenSandbox proxy's own error from a response body, or None.
-
-    ``_normalize_error_detail`` emits a flat ``{"code", "message"}`` -- no nested
-    ``error`` key -- including when the proxy's 180s read timeout fires and
-    ``httpx.ReadTimeout`` stringifies to an empty message. That is a decision the
-    proxy already made, not a dropped connection: retrying it re-runs generation
-    for the same wall time and fails the same way.
-    """
-    decoded = _decode_json_object(body)
-    if decoded is None or "error" in decoded:
-        return None
-    code = decoded.get("code")
-    message = decoded.get("message")
-    if not isinstance(code, str):
-        return None
-    if message is None:
-        message = ""
-    if not isinstance(message, str):
-        return None
-    return f"{code}: {message}".strip()
-
-
-# Below this, a request cannot have been cut for staying open too long, so the host went
-# away instead. Only used to pick which hint an error carries.
-MIN_PROXY_CUTOFF_S = 30.0
-
-
-def _transit_failure_hint(elapsed: float) -> str:
-    """Name the likely cause of a POST that failed in transit, based on how long it ran."""
-    if elapsed < MIN_PROXY_CUTOFF_S:
-        return (
-            "too fast to be the proxy's request-duration cap, so the host stopped "
-            "answering -- check whether the sandbox is still running (OOMKilled, evicted, "
-            "or crashed)"
-        )
-    return (
-        "the sandbox proxy caps how long one request may stay open, so lower "
-        "sandbox.rollout_chunk_size if this persists"
-    )
-
-
-def _unwrap_result(entry: Any) -> Any:
-    """Return the Gym result from an entry the host may send as ``(row, result)``."""
-    if isinstance(entry, (list, tuple)) and len(entry) == 2:
-        return entry[1]
-    return entry
-
-
-def _index_results_by_rowidx(results: list, examples: list[dict]) -> dict[Any, Any]:
-    """Map each ``_rowidx`` to its result, rejecting anything but an exact cover.
-
-    The host runs examples concurrently and returns them tagged rather than ordered, so
-    results are paired by tag. Validated rather than trusted: a mispairing would attribute
-    one prompt's tokens and reward to another and raise nothing.
-    """
-    by_rowidx: dict[Any, Any] = {}
-    for entry in results:
-        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-            raise RuntimeError(
-                "rollout host returned an untagged result; expected [_rowidx, result] "
-                f"pairs, got {type(entry).__name__}"
-            )
-        rowidx, result = entry
-        if rowidx in by_rowidx:
-            raise RuntimeError(f"rollout host returned duplicate _rowidx {rowidx}")
-        by_rowidx[rowidx] = result
-
-    expected = {row["_rowidx"] for row in examples}
-    if by_rowidx.keys() != expected:
-        missing = sorted(expected - by_rowidx.keys())
-        unexpected = sorted(by_rowidx.keys() - expected)
-        raise RuntimeError(
-            f"rollout host result rows do not cover the batch; "
-            f"missing={missing} unexpected={unexpected}"
-        )
-    return by_rowidx
-
-
-def _rowidx_span(chunk: list[dict]) -> str:
-    """Render a chunk's ``_rowidx`` range, so a stalled chunk names its own rows."""
-    indices = [row["_rowidx"] for row in chunk if "_rowidx" in row]
-    if not indices:
-        return "?"
-    return f"{min(indices)}-{max(indices)}"
-
-
-def _reward_summary(results: list) -> str:
-    """Summarize a chunk's rewards, including how many were non-zero.
-
-    The non-zero count distinguishes an all-zero batch, which a mean alone can hide.
-    """
-    rewards = []
-    for entry in results:
-        result = _unwrap_result(entry)
-        if isinstance(result, Mapping) and "reward" in result:
-            try:
-                rewards.append(float(result["reward"]))
-            except (TypeError, ValueError):
-                continue
-    if not rewards:
-        return "reward=n/a"
-    nonzero = sum(1 for reward in rewards if reward != 0.0)
-    return (
-        f"reward mean={sum(rewards) / len(rewards):.3f} "
-        f"min={min(rewards):.3f} max={max(rewards):.3f} nonzero={nonzero}/{len(rewards)}"
-    )
-
-
-def _run_coro_sync(coro: Coroutine[Any, Any, T]) -> T:
-    """Run ``coro`` from sync Ray methods on an async actor.
-
-    ``SandboxedGymActor.run_rollouts`` is async, so Ray installs a running event
-    loop on the actor. Sync methods like ``_spinup`` / ``shutdown`` must not call
-    ``asyncio.run`` on that thread.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
-
-
 SANDBOXED_GYM_ACTOR_FQN = (
     "nemo_rl.environments.sandbox.nemo_gym_actor.SandboxedGymActor"
 )
 
-# Bootstrap reads the Gym global config from GYM_GLOBAL_CONFIG_ENV_KEY (defined in
-# gym_host_runtime, which stays nemo_rl-import-free) instead of a shared filesystem:
-# the runtime image has no access to the training pod's config.
+NEMO_RL_IMAGE_GIT_ROOT = "/opt/nemo-rl"
+# Ray names a worker venv after the actor FQN, so renaming the actor without moving this
+# path leaves the sandbox executing from a directory that does not exist.
+SANDBOXED_GYM_ACTOR_VENV = f"/opt/ray_venvs/{SANDBOXED_GYM_ACTOR_FQN}"
 
 
 class SandboxedGymActorConfig(NemoGymConfig):
@@ -266,24 +88,16 @@ class SandboxedGymActorConfig(NemoGymConfig):
 def build_sandbox_global_config(cfg: SandboxedGymActorConfig) -> dict[str, Any]:
     """Build the Gym global config the job sandbox should start with.
 
-    Starts from the user/job Gym dict (``initial_global_config_dict``), then
-    applies the same training-time injections ``NemoGym._spinup`` makes for the
-    colocated tree. Trust-boundary differences: the training Ray GCS address is
-    never sent, and Gym servers bind to sandbox loopback instead of a routable
-    node IP. The head server entry is left to the runtime bootstrap, which owns
-    port selection inside the sandbox.
+    Deliberately only the training-time injections ``NemoGym._spinup`` makes for the
+    colocated tree. Sandbox-local infrastructure defaults are the package's to add.
     """
     global_config = dict(cfg.get("initial_global_config_dict") or {})
     # NeMo-RL-only training knob that the Gym servers reject.
     global_config.pop("effort_levels", None)
-    # The sandbox never joins the training Ray cluster, even if a user config
-    # carries an address.
-    global_config.pop("ray_head_node_address", None)
 
     global_config["policy_model_name"] = cfg["model_name"]
     global_config["policy_api_key"] = "dummy_key"
     global_config["policy_base_url"] = cfg["base_urls"]
-    global_config.setdefault("default_host", "127.0.0.1")
 
     global_config["port_range_low"] = cfg.get(
         "port_range_low", DEFAULT_GYM_PORT_RANGE_LOW
@@ -291,157 +105,133 @@ def build_sandbox_global_config(cfg: SandboxedGymActorConfig) -> dict[str, Any]:
     global_config["port_range_high"] = cfg.get(
         "port_range_high", DEFAULT_GYM_PORT_RANGE_HIGH
     )
-
-    global_config.setdefault("global_aiohttp_connector_limit_per_host", 16_384)
-    global_config.setdefault("global_aiohttp_connector_limit", 65_536)
-    # Writable dirs inside the job sandbox (image Gym tree is root-owned).
-    global_config.setdefault("uv_cache_dir", gym_uv_cache_dir())
-    global_config.setdefault("uv_venv_dir", gym_uv_venv_dir())
-    # Gym's `uv pip install` names no target, so it resolves one from the environment.
-    # The image sets UV_PYTHON to an absolute path (/opt/cpython/bin/python3.13, needed so
-    # RL's checked-in .python-version cannot pin an unpatched interpreter), and an absolute
-    # UV_PYTHON outranks the venv Gym just activated -- installs then land in the read-only
-    # interpreter tree and every server dies with "Permission denied ... site-packages",
-    # surfacing only as "Process `policy_model` finished unexpectedly!". This makes Gym pass
-    # `--python <venv>/bin/python` explicitly instead of inferring a target.
-    global_config.setdefault("uv_pip_set_python", True)
     return global_config
 
 
-def collect_gym_host_egress_allows(
-    *,
-    configured: list[GymHostEgressRule],
-    broker_host: str,
-    broker_port: int,
-    base_urls: list[str | None],
-) -> tuple[GymHostEgressRule, ...]:
-    """Collect and deduplicate trusted job-host whitelist endpoints."""
-    rules = list(configured)
-    rules.append(GymHostEgressRule(host=broker_host, port=broker_port))
-    for base_url in base_urls:
-        if not base_url:
-            continue
-        parsed = urlparse(str(base_url))
-        if not parsed.hostname:
-            continue
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        rules.append(GymHostEgressRule(host=parsed.hostname, port=port))
-    deduped: dict[tuple[str, int], GymHostEgressRule] = {}
-    for rule in rules:
-        deduped.setdefault((rule.host, rule.port), rule)
-    return tuple(deduped.values())
+def nemo_rl_gym_host_entrypoint() -> list[str]:
+    """Entrypoint that starts the Gym host inside the NeMo-RL training image.
+
+    The package defaults ``venv`` to its own actor's Ray venv, which does not exist in this
+    image. Resolving the script and runtime paths against this process's install is correct
+    only because the actor and the sandbox run the same image.
+    """
+    return default_gym_host_entrypoint(
+        venv=os.environ.get("SANDBOXED_GYM_VENV") or SANDBOXED_GYM_ACTOR_VENV,
+        git_root=NEMO_RL_IMAGE_GIT_ROOT,
+    )
 
 
-def _gym_host_spec_from_config(
-    cfg: SandboxedGymActorConfig,
-    sandboxed: NemoGymSandboxedConfig,
-    broker_url: str,
-    broker_token: str,
-    broker_host: str,
-    broker_port: int,
-) -> GymHostSpec:
+def build_serve_config(
+    cfg: SandboxedGymActorConfig, sandboxed: NemoGymSandboxedConfig
+) -> SandboxedGymServeConfig:
+    """Translate the NeMo-RL actor config into the package's serve config."""
     sandbox = sandboxed.sandbox
     assert sandbox is not None
 
-    dataset_path = None
-    dataset_mount = None
-    if sandbox.dataset_pvc_claim:
-        dataset_path = sandbox.dataset_mount_path
-        dataset_mount = GymHostVolumeMount(
-            pvc_claim=sandbox.dataset_pvc_claim,
-            sub_path=sandbox.dataset_sub_path,
-            mount_path=sandbox.dataset_mount_path,
-            read_only=True,
+    if not sandbox.entrypoint:
+        # The package leaves this unset so a runtime image's own CMD starts the host; the
+        # training image has no such CMD.
+        sandbox = sandbox.model_copy(
+            update={"entrypoint": nemo_rl_gym_host_entrypoint()}
         )
 
-    bootstrap_env = build_bootstrap_env(
-        sandboxed.job_id,
-        sandboxed.environment_path or sandbox.env_mount_path,
-        sandbox.work_mount_path,
-        broker_url,
-        broker_token,
-        sandbox.max_request_bytes,
-        sandbox.max_response_bytes,
-        dataset_path=dataset_path,
-        extra={
-            ENVIRONMENT_OFFLINE_ENV_KEY: "1" if sandboxed.environment_offline else "0",
-            GYM_GLOBAL_CONFIG_ENV_KEY: json.dumps(
-                build_sandbox_global_config(cfg), sort_keys=True
-            ),
-            # The host heartbeats a running rollout, so no hop between here and there
-            # will time one out any more. It needs its own deadline, and the caller's
-            # is the only one that matters.
-            ROLLOUT_DEADLINE_ENV_KEY: str(sandbox.rollout_timeout_s),
-            **uv_env_passthrough(),
-        },
-    )
-
-    egress_allow = collect_gym_host_egress_allows(
-        configured=sandbox.network_policy.egress_allow,
-        broker_host=broker_host,
-        broker_port=broker_port,
-        base_urls=list(cfg.get("base_urls") or []),
-    )
-
-    return GymHostSpec(
+    return SandboxedGymServeConfig(
         job_id=sandboxed.job_id,
-        runtime_image=sandbox.image,
-        environment_mount=GymHostVolumeMount(
-            pvc_claim=sandbox.environment_pvc_claim,
-            sub_path=sandbox.environment_sub_path,
-            mount_path=sandbox.env_mount_path,
-            read_only=True,
-        ),
-        dataset_mount=dataset_mount,
-        workspace_mount=GymHostVolumeMount(
-            pvc_claim=sandbox.workspace_pvc_claim,
-            sub_path=sandbox.workspace_sub_path,
-            mount_path=sandbox.work_mount_path,
-            read_only=False,
-        ),
-        egress_allow=egress_allow,
-        bootstrap_env=bootstrap_env,
-        max_request_bytes=sandbox.max_request_bytes,
-        max_response_bytes=sandbox.max_response_bytes,
-        ttl_s=sandbox.ttl_s,
-        ready_timeout_s=sandbox.ready_timeout_s,
-        resources=sandbox.resources,
-        runtime_http_port=sandbox.runtime_http_port,
-        allow_internet=sandbox.allow_internet,
-        public_dns_allow=sandbox.network_policy.public_dns_allow,
-        resolver_addresses=sandbox.network_policy.resolver_addresses,
-        entrypoint=(
-            tuple(sandbox.entrypoint)
-            if sandbox.entrypoint
-            else tuple(default_gym_host_entrypoint())
-        ),
+        host_provider=sandboxed.host_provider,
+        environment_path=sandboxed.environment_path,
+        environment_offline=sandboxed.environment_offline,
+        sandbox=sandbox,
+        episode_broker=dict(sandboxed.episode_broker),
+        gym_global_config=build_sandbox_global_config(cfg),
+        host_env=uv_env_passthrough(),
+        policy_base_urls=tuple(str(url) for url in (cfg.get("base_urls") or []) if url),
     )
 
 
-# Deliberately no ``max_restarts``, for the same reason as
-# :class:`~nemo_rl.environments.sandbox.broker_actor.SandboxEpisodeBrokerActor`: the host handle
-# lives only in this process, so a restarted actor comes back unable to name the sandbox its
-# predecessor created. ``__init__`` then provisions a second one and the first survives to its
-# ttl_s, doubling the pods a job holds. A crash should fail the job instead. Restart support
-# needs label-based reconciliation of the JOB_ID_METADATA_KEY the host spec already stamps.
+def _tag_examples(examples: list[dict]) -> list[dict]:
+    """Copy each row's ``_rowidx`` onto the package's caller-owned join key.
+
+    Not ``_ng_task_index``: that identifies a *prompt group* here, so all ``num_generations``
+    rows of a group share one value while their ``_rowidx`` differ. Joining on it would see
+    duplicates, and overwriting it would change what Gym groups reward metrics by.
+
+    Copies rather than mutates, so the caller's rows keep the identity NeMo-RL reads later.
+    """
+    tagged = []
+    for row in examples:
+        if "_rowidx" not in row:
+            raise RuntimeError(
+                "NeMo-Gym row is missing _rowidx; results cannot be paired with prompts"
+            )
+        tagged.append({**row, SG_EXAMPLE_ID: row["_rowidx"]})
+    return tagged
+
+
+def _index_results_by_rowidx(results: list, examples: list[dict]) -> dict[Any, Any]:
+    """Map each result's join key back to its ``_rowidx``, rejecting anything but an exact cover.
+
+    The host runs examples concurrently and returns them tagged rather than ordered, so
+    results are paired by tag. Validated rather than trusted: a mispairing would attribute
+    one prompt's tokens and reward to another and raise nothing.
+    """
+    by_rowidx: dict[Any, Any] = {}
+    for result in results:
+        if not isinstance(result, Mapping) or result.get(SG_EXAMPLE_ID) is None:
+            raise RuntimeError(
+                f"rollout host returned an untagged result; expected {SG_EXAMPLE_ID} on "
+                f"every result, got {type(result).__name__}"
+            )
+        rowidx = result[SG_EXAMPLE_ID]
+        if rowidx in by_rowidx:
+            raise RuntimeError(
+                f"rollout host returned duplicate {SG_EXAMPLE_ID} {rowidx}"
+            )
+        by_rowidx[rowidx] = result
+
+    expected = {row["_rowidx"] for row in examples}
+    if by_rowidx.keys() != expected:
+        missing = sorted(expected - by_rowidx.keys())
+        unexpected = sorted(by_rowidx.keys() - expected)
+        raise RuntimeError(
+            f"rollout host result rows do not cover the batch; "
+            f"missing={missing} unexpected={unexpected}"
+        )
+    return by_rowidx
+
+
+def _reward_summary(results: list) -> str:
+    """Summarize a batch's rewards, including how many were non-zero.
+
+    The non-zero count distinguishes an all-zero batch, which a mean alone can hide.
+    """
+    rewards = []
+    for result in results:
+        if isinstance(result, Mapping) and "reward" in result:
+            try:
+                rewards.append(float(result["reward"]))
+            except (TypeError, ValueError):
+                continue
+    if not rewards:
+        return "reward=n/a"
+    nonzero = sum(1 for reward in rewards if reward != 0.0)
+    return (
+        f"reward mean={sum(rewards) / len(rewards):.3f} "
+        f"min={min(rewards):.3f} max={max(rewards):.3f} nonzero={nonzero}/{len(rewards)}"
+    )
+
+
+# Deliberately no ``max_restarts``: the host handle lives only in this process, so a
+# restarted actor comes back unable to name the sandbox its predecessor created.
+# ``_spinup`` then provisions a second one and the first survives to its ttl_s, doubling
+# the pods a job holds. A crash should fail the job instead. Restart support needs
+# label-based reconciliation of the JOB_ID_METADATA_KEY the host spec already stamps.
 @ray.remote  # pragma: no cover
 class SandboxedGymActor(EnvironmentInterface):
     """Trusted proxy that runs Gym rollouts inside an isolated job sandbox."""
 
     def __init__(self, cfg: SandboxedGymActorConfig) -> None:
         self.cfg = cfg
-        self._host_handle = None
-        self._host_provider = None
-        self._broker_actor = None
-        self._signal_cleanup_installed = False
-        self._broker_endpoint = None
-        self._rollout_timeout_s = 30 * 60.0
-        self._max_request_bytes = 268_435_456
-        self._max_response_bytes = 268_435_456
-        self._rollout_chunk_size = DEFAULT_ROLLOUT_CHUNK_SIZE
-        self._rollout_max_in_flight = DEFAULT_ROLLOUT_MAX_IN_FLIGHT
-        self._rollout_max_attempts = DEFAULT_ROLLOUT_MAX_ATTEMPTS
-        self._rollout_retry_backoff_s = DEFAULT_ROLLOUT_RETRY_BACKOFF_S
+        self._session: SandboxedGymSession | None = None
         self._postprocess_cfg = {
             "invalid_tool_call_patterns": cfg.get("invalid_tool_call_patterns"),
             "thinking_tags": cfg.get("thinking_tags"),
@@ -457,87 +247,18 @@ class SandboxedGymActor(EnvironmentInterface):
         if sandboxed is None or not sandboxed.sandboxed or sandboxed.sandbox is None:
             raise ValueError("SandboxedGymActor requires env.nemo_gym.sandboxed=true")
 
-        sandbox: SandboxConfig = sandboxed.sandbox
-        self._rollout_timeout_s = float(sandbox.rollout_timeout_s)
-        self._max_request_bytes = sandbox.max_request_bytes
-        self._max_response_bytes = sandbox.max_response_bytes
-        self._rollout_chunk_size = sandbox.rollout_chunk_size
-        self._rollout_max_in_flight = sandbox.rollout_max_in_flight
-        self._rollout_max_attempts = sandbox.rollout_max_attempts
-        self._rollout_retry_backoff_s = sandbox.rollout_retry_backoff_s
-
-        broker_cfg = EpisodeBrokerConfig.model_validate(
-            {"job_id": sandboxed.job_id, **dict(sandboxed.episode_broker)}
+        serve_cfg = build_serve_config(self.cfg, sandboxed)
+        self._session = SandboxedGymOrchestrator().start(
+            serve_cfg,
+            # Pinned to this actor's node so the hop stays local; the Gym host reaches it over
+            # HTTP regardless, and is never given a Ray handle.
+            broker=RayEpisodeBroker(
+                serve_cfg.broker_config(),
+                node_id=ray.get_runtime_context().get_node_id(),
+            ),
         )
-        self._broker_actor, self._broker_endpoint = start_episode_broker(
-            broker_cfg,
-            node_id=ray.get_runtime_context().get_node_id(),
-        )
-
-        broker_host = self._broker_endpoint.host
-        # Prefer hostname for egress allowlists when the URL carries one.
-        parsed = urlparse(self._broker_endpoint.url)
-        if parsed.hostname and not parsed.hostname.replace(".", "").isdigit():
-            broker_host = parsed.hostname
-
-        host_spec = _gym_host_spec_from_config(
-            self.cfg,
-            sandboxed,
-            self._broker_endpoint.url,
-            self._broker_endpoint.token,
-            broker_host,
-            self._broker_endpoint.port,
-        )
-
-        self._host_provider = get_host_provider(
-            sandboxed.host_provider,
-            sandbox.host_provider_options,
-        )
-        self._host_handle = _run_coro_sync(self._host_provider.create_host(host_spec))
-        self._install_termination_cleanup()
-        try:
-            _run_coro_sync(
-                self._host_provider.wait_ready(
-                    self._host_handle, sandbox.ready_timeout_s
-                )
-            )
-        except Exception:
-            _run_coro_sync(self._host_provider.destroy_host(self._host_handle))
-            self._host_handle = None
-            raise
-
-    def _install_termination_cleanup(self) -> None:
-        """Destroy the host when this process exits without ``shutdown()`` being called.
-
-        Ray tears an actor's worker down without running any user teardown, so a job that is
-        cancelled, evicted or preempted otherwise leaves its sandbox running until ttl_s.
-        Kubernetes sends SIGTERM before SIGKILL, so a handler covers those paths; SIGKILL and
-        node loss cannot be, and stay ttl_s's job. Installed after ``create_host`` returns so
-        there is always a handle to destroy, and only once per actor.
-        """
-        if self._signal_cleanup_installed:
-            return
-        self._signal_cleanup_installed = True
-
-        atexit.register(self.shutdown)
-
-        def _terminate(signum: int, _frame: Any) -> None:
-            LOGGER.warning(
-                "received signal %s; destroying sandboxed Gym host before exit", signum
-            )
-            self.shutdown()
-            # Restore the default action and re-raise so the exit status still reports the
-            # signal -- swallowing it would make a cancelled job look like a clean stop.
-            signal.signal(signum, signal.SIG_DFL)
-            os.kill(os.getpid(), signum)
-
-        for signum in (signal.SIGTERM, signal.SIGINT):
-            try:
-                signal.signal(signum, _terminate)
-            except ValueError:
-                # Ray may run the actor off the main thread, where signal handlers cannot be
-                # installed. atexit still covers interpreter shutdown.
-                LOGGER.debug("could not install %s handler off the main thread", signum)
+        # After start(), so a spinup that failed leaves nothing registered to destroy.
+        install_termination_cleanup(self.shutdown)
 
     def _postprocess(
         self, nemo_gym_result: dict, tokenizer: PreTrainedTokenizerBase
@@ -551,179 +272,6 @@ class SandboxedGymActor(EnvironmentInterface):
             nemo_gym_result, tokenizer
         )
 
-    async def _post_rollouts_chunked(self, examples: list[dict]) -> list:
-        """POST ``examples`` as bounded concurrent chunks, returning results in batch order.
-
-        Chunking keeps request duration and response size proportional to a chunk rather
-        than the whole batch.
-        """
-        chunks = [
-            examples[start : start + self._rollout_chunk_size]
-            for start in range(0, len(examples), self._rollout_chunk_size)
-        ]
-        semaphore = asyncio.Semaphore(self._rollout_max_in_flight)
-
-        async def _post_chunk(index: int, chunk: list[dict]) -> list:
-            rows = _rowidx_span(chunk)
-            label = f"chunk {index + 1}/{len(chunks)}"
-            for attempt in range(1, self._rollout_max_attempts + 1):
-                try:
-                    async with semaphore:
-                        # Logged inside the semaphore so the timestamp is when it goes out.
-                        LOGGER.info(
-                            "rollout %s: POST %d example(s) [rows %s]%s",
-                            label,
-                            len(chunk),
-                            rows,
-                            ""
-                            if attempt == 1
-                            else f" (attempt {attempt}/{self._rollout_max_attempts})",
-                        )
-                        started = time.monotonic()
-                        results = await asyncio.to_thread(self._post_rollouts, chunk)
-                except RolloutTransportError as exc:
-                    if not exc.retryable or attempt == self._rollout_max_attempts:
-                        raise RolloutTransportError(
-                            f"rollout {label} (rows {rows}, {len(chunk)} example(s)) "
-                            f"failed after {attempt} attempt(s): {exc}",
-                            retryable=exc.retryable,
-                            origin=exc.origin,
-                        ) from exc
-                    backoff = self._rollout_retry_backoff_s * attempt
-                    LOGGER.warning(
-                        "rollout %s [rows %s] attempt %d/%d failed (%s); retrying in "
-                        "%.1fs: %s",
-                        label,
-                        rows,
-                        attempt,
-                        self._rollout_max_attempts,
-                        exc.origin,
-                        backoff,
-                        exc,
-                    )
-                    # Slept outside the semaphore so a backing-off chunk frees its slot.
-                    await asyncio.sleep(backoff)
-                    continue
-                LOGGER.info(
-                    "rollout %s: %d result(s) in %.1fs [rows %s] %s",
-                    label,
-                    len(results),
-                    time.monotonic() - started,
-                    rows,
-                    _reward_summary(results),
-                )
-                return results
-            raise AssertionError("unreachable: loop either returns or raises")
-
-        # return_exceptions so a failure does not leave the other chunks running detached.
-        parts = await asyncio.gather(
-            *(_post_chunk(index, chunk) for index, chunk in enumerate(chunks)),
-            return_exceptions=True,
-        )
-        failures = [part for part in parts if isinstance(part, BaseException)]
-        if failures:
-            # Every chunk failing points at the host rather than at the requests.
-            whole_batch = (
-                " Every chunk failed, so the sandbox itself is the likely cause rather "
-                "than any one request."
-                if len(failures) == len(chunks) > 1
-                else ""
-            )
-            raise RolloutTransportError(
-                f"{len(failures)} of {len(chunks)} rollout chunk(s) failed for this "
-                f"batch of {len(examples)} example(s).{whole_batch} "
-                f"First failure: {failures[0]}",
-                retryable=False,
-                origin=getattr(failures[0], "origin", "proxy"),
-            ) from failures[0]
-        return [result for part in parts for result in part]
-
-    def _post_rollouts(self, examples: list[dict]) -> list:
-        assert self._host_handle is not None
-        body = json.dumps({"examples": examples}).encode("utf-8")
-        if len(body) > self._max_request_bytes:
-            raise ValueError(
-                f"rollout request exceeds max_request_bytes "
-                f"({len(body)} > {self._max_request_bytes})"
-            )
-        request = urllib.request.Request(
-            self._host_handle.rollout_url,
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                **self._host_handle.headers,
-            },
-        )
-        started = time.monotonic()
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self._rollout_timeout_s
-            ) as response:
-                payload = response.read()
-        except urllib.error.HTTPError as exc:
-            elapsed = time.monotonic() - started
-            error_body = exc.read().decode("utf-8", errors="replace")
-            reported = _sandbox_reported_error(error_body)
-            if reported is not None:
-                # The host answered, so the environment failed: deterministic.
-                raise RolloutTransportError(
-                    f"the sandboxed environment failed this rollout after {elapsed:.1f}s "
-                    f"for {len(examples)} example(s) (HTTP {exc.code} from "
-                    f"{self._host_handle.rollout_url}): {reported}",
-                    retryable=False,
-                    origin="sandbox",
-                ) from exc
-            proxy_reported = _proxy_reported_error(error_body)
-            if proxy_reported is not None:
-                # The proxy answered with its own envelope, so it already gave up --
-                # typically the 180s read timeout. A retry repeats the same work.
-                raise RolloutTransportError(
-                    f"rollout POST was rejected by the sandbox proxy with HTTP {exc.code} "
-                    f"after {elapsed:.1f}s for {len(examples)} example(s) to "
-                    f"{self._host_handle.rollout_url}: {proxy_reported}; "
-                    f"{_transit_failure_hint(elapsed)}",
-                    retryable=False,
-                    origin="proxy",
-                ) from exc
-            raise RolloutTransportError(
-                f"rollout POST was rejected in transit with HTTP {exc.code} after "
-                f"{elapsed:.1f}s for {len(examples)} example(s) to "
-                f"{self._host_handle.rollout_url}; {_transit_failure_hint(elapsed)}. "
-                f"Body: {error_body[:512]}",
-                # Unstructured 5xx (HTML, empty) is a dropped hop, so a retry may work.
-                retryable=exc.code >= 500,
-                origin="proxy",
-            ) from exc
-        except (http.client.HTTPException, OSError) as exc:
-            raise RolloutTransportError(
-                f"rollout POST to {self._host_handle.rollout_url} lost its connection "
-                f"after {time.monotonic() - started:.1f}s for {len(examples)} "
-                f"example(s): {type(exc).__name__}: {exc}",
-                retryable=True,
-                origin="proxy",
-            ) from exc
-        if len(payload) > self._max_response_bytes:
-            raise RolloutTransportError(
-                f"rollout response exceeds max_response_bytes "
-                f"({len(payload)} > {self._max_response_bytes}); lower "
-                f"sandbox.rollout_chunk_size or raise sandbox.max_response_bytes",
-                retryable=False,
-                origin="client",
-            )
-        decoded = json.loads(payload.decode("utf-8"))
-        if isinstance(decoded, dict) and "error" in decoded:
-            raise RolloutTransportError(
-                f"the sandboxed environment failed this rollout: {decoded['error']}",
-                retryable=False,
-                origin="sandbox",
-            )
-        if isinstance(decoded, dict) and "results" in decoded:
-            return list(decoded["results"])
-        if isinstance(decoded, list):
-            return decoded
-        raise RuntimeError(f"unexpected rollout response shape: {type(decoded)}")
-
     async def run_rollouts(
         self,
         nemo_gym_examples: list[dict],
@@ -733,7 +281,7 @@ class SandboxedGymActor(EnvironmentInterface):
         """POST examples to the job host and stream postprocessed results."""
         if not nemo_gym_examples:
             raise ValueError("NeMo-Gym rollout batch must not be empty")
-        if self._host_handle is None:
+        if self._session is None:
             raise RuntimeError("SandboxedGymActor._spinup has not completed")
 
         from nemo_rl.utils.fastokens import maybe_patch_fastokens
@@ -743,24 +291,25 @@ class SandboxedGymActor(EnvironmentInterface):
         timer = Timer()
         counts_left = Counter(row["agent_ref"]["name"] for row in nemo_gym_examples)
 
-        num_chunks = -(-len(nemo_gym_examples) // self._rollout_chunk_size)
+        # Before the POST, not after: a batch that stalls in the sandbox still names itself.
         LOGGER.info(
-            "rollout batch: POST %d example(s) as %d chunk(s) of %d "
-            "(max %d in flight) -> %s",
+            "rollout batch: POST %d example(s) in chunks of %d -> %s",
             len(nemo_gym_examples),
-            num_chunks,
-            self._rollout_chunk_size,
-            self._rollout_max_in_flight,
-            self._host_handle.rollout_url,
+            self._session.cfg.sandbox.rollout_chunk_size,
+            self._session.host.rollout_url,
         )
         timer.start("_run_rollouts_total")
         with timer.time(label=f"{timer_prefix}/await_results"):
-            results = await self._post_rollouts_chunked(nemo_gym_examples)
+            # Off-thread: the session's transport is synchronous, and awaiting it inline
+            # would block the event loop Ray runs this async actor on.
+            results = await asyncio.to_thread(
+                self._session.run_rollouts, _tag_examples(nemo_gym_examples)
+            )
         LOGGER.info(
-            "rollout batch: %d result(s) in %.1fs across %d chunk(s) | %s",
+            "rollout batch: %d result(s) for %d example(s) in %.1fs | %s",
             len(results),
+            len(nemo_gym_examples),
             timer.get_timing_metrics("sum").get(f"{timer_prefix}/await_results", 0.0),
-            num_chunks,
             _reward_summary(results),
         )
 
@@ -800,20 +349,9 @@ class SandboxedGymActor(EnvironmentInterface):
 
     def shutdown(self) -> None:
         """Destroy the job host, then stop the episode broker."""
-        if self._host_provider is not None and self._host_handle is not None:
-            try:
-                _run_coro_sync(self._host_provider.destroy_host(self._host_handle))
-            except Exception:
-                LOGGER.exception("Failed to destroy sandboxed Gym host")
-            self._host_handle = None
-
-        if self._broker_actor is not None:
-            try:
-                ray.get(self._broker_actor.shutdown.remote())
-            except Exception:
-                LOGGER.exception("Failed to shut down episode broker")
-            self._broker_actor = None
-            self._broker_endpoint = None
+        if self._session is not None:
+            self._session.shutdown()
+            self._session = None
 
     def step(self, message_log_batch, metadata):
         raise NotImplementedError
