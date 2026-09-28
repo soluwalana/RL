@@ -1274,12 +1274,39 @@ def test_shard_set_shutdown_releases_the_placement_group_once():
         shard_set.shutdown()
         shard_set.shutdown()
 
-    assert shutdown.call_count == 2
-    assert all(
-        invocation.kwargs
-        == {"timeout": nemo_gym_mod.NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S}
-        for invocation in shutdown.call_args_list
+    # The second call is a no-op. Calling shutdown on an actor the first pass
+    # already stopped is what surfaces "killed by ray.kill".
+    shutdown.assert_called_once_with(
+        {
+            "nemo_gym[tools][0]": shard_set.handles["tools"][0],
+            "nemo_gym[tools][1]": shard_set.handles["tools"][1],
+        },
+        timeout=nemo_gym_mod.NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S,
     )
-    assert kill.call_count == 4
+    # A shutdown() that returns has torn the host down. ray.kill after that
+    # races the worker's own teardown.
+    kill.assert_not_called()
     # Releasing a group twice raises; the second shutdown must not try.
     remove.assert_called_once_with(pg)
+
+
+def test_shard_set_shutdown_kills_only_when_teardown_itself_fails():
+    """A per-actor failure is killed inside shutdown_environments.
+
+    This kill is for the call raising before that loop finishes. It must not
+    run when teardown returned.
+    """
+    first, second = MagicMock(), MagicMock()
+    shard_set = nemo_gym_mod.NemoGymShardSet(handles={"tools": [first, second]})
+
+    with (
+        patch.object(
+            nemo_gym_mod,
+            "shutdown_environments",
+            side_effect=RuntimeError("teardown raised"),
+        ),
+        patch.object(nemo_gym_mod.ray, "kill") as kill,
+    ):
+        shard_set.shutdown()
+
+    assert kill.call_args_list == [call(first), call(second)]

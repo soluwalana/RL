@@ -1784,6 +1784,7 @@ class NemoGymShardSet:
         repr=False,
         compare=False,
     )
+    _shut_down: bool = field(default=False, repr=False)
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -1883,7 +1884,21 @@ class NemoGymShardSet:
         timeout: float | None = NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S,
         force_kill: bool = True,
     ) -> None:
-        """Stop every actor, then release the bundles they were pinned to."""
+        """Stop every actor, then release the bundles they were pinned to.
+
+        A second call does nothing. Training shuts this set down from
+        ``grpo_train`` and again from the driver, and the second pass used to
+        call ``shutdown`` on actors ``ray.kill`` had already removed.
+
+        ``force_kill`` applies only when this call itself fails before the
+        per-actor teardown finishes. An actor whose ``shutdown()`` returns has
+        already destroyed its host; killing it then races that worker's
+        teardown and aborts the process. An actor whose ``shutdown()`` raises
+        or times out is killed inside ``shutdown_environments``.
+        """
+        if self._shut_down:
+            return
+        self._shut_down = True
         handles = self.all_handles
         try:
             shutdown_environments(
@@ -1896,12 +1911,14 @@ class NemoGymShardSet:
             )
         except Exception as error:
             print(f"Failed to shut down NeMo-Gym actors: {error}")
-        if force_kill:
-            for handle in handles:
-                try:
-                    ray.kill(handle)
-                except Exception as error:
-                    print(f"Failed to kill NeMo-Gym actor after shutdown: {error}")
+            if force_kill:
+                for handle in handles:
+                    try:
+                        ray.kill(handle)
+                    except Exception as kill_error:
+                        print(
+                            f"Failed to kill NeMo-Gym actor after shutdown: {kill_error}"
+                        )
         if self.placement_group is not None:
             try:
                 remove_placement_group(self.placement_group)
@@ -1935,6 +1952,7 @@ def _build_sandboxed_gym_actor(
     *,
     base_urls: list[str],
     model_name: str,
+    tokenizer: PreTrainedTokenizerBase,
     enable_router_replay: bool,
     use_fastokens: bool,
     token_capture: Optional[dict[str, Any]],
@@ -1942,8 +1960,7 @@ def _build_sandboxed_gym_actor(
     """Provision ``SandboxedGymActor`` instead of the colocated ``NemoGym`` actor.
 
     The sandbox keys are peeled off first so the remainder is still a Gym global
-    config. This actor takes the tokenizer per rollout, so spinup does not call
-    ``set_tokenizer``.
+    config. The tokenizer is installed once after spinup, same as ``NemoGym``.
     """
     from sandboxed_gym.host.models import NemoGymSandboxedConfig
     from nemo_rl.environments.sandbox.nemo_gym_actor import (
@@ -1982,6 +1999,7 @@ def _build_sandboxed_gym_actor(
     shard_set = NemoGymShardSet(handles={DEFAULT_SHARD_NAME: [actor]})
     try:
         ray.get(actor._spinup.remote())
+        ray.get(actor.set_tokenizer.remote(tokenizer))
     except BaseException:
         shard_set.shutdown(
             timeout=NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S,
@@ -2029,6 +2047,7 @@ def build_nemo_gym_actors(
             nemo_gym_dict,
             base_urls=base_urls,
             model_name=model_name,
+            tokenizer=tokenizer,
             enable_router_replay=enable_router_replay,
             use_fastokens=use_fastokens,
             token_capture=token_capture,

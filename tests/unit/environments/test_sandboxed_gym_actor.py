@@ -192,12 +192,42 @@ def _rollout_actor(session):
     actor.cfg = {"use_fastokens": False}
     actor._session = session
     actor._postprocess_cfg = {}
+    actor._tokenizer = object()
     return actor
+
+
+def test_postprocess_forwards_the_row_result_and_tokenizer(monkeypatch):
+    """Postprocess passes the Gym row, the result, and the tokenizer."""
+    from nemo_rl.environments.nemo_gym import NemoGym
+
+    seen = {}
+
+    def fake(self, row, result, tokenizer, *, include_initial_multimodal_data=True):
+        seen["cfg"] = self.cfg
+        seen["args"] = (row, result, tokenizer, include_initial_multimodal_data)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        NemoGym.__ray_metadata__.modified_class,
+        "_postprocess_nemo_gym_to_nemo_rl_result",
+        fake,
+    )
+    actor = _actor_class().__new__(_actor_class())
+    actor._postprocess_cfg = {"model_name": "meta-llama/Llama-3.1-8B"}
+    row = {"agent_ref": {"name": "math"}}
+    result = {"reward": 1.0}
+    tokenizer = object()
+
+    assert actor._postprocess(row, result, tokenizer) == {"ok": True}
+    assert seen["cfg"] == actor._postprocess_cfg
+    assert seen["args"] == (row, result, tokenizer, True)
 
 
 def _patch_rollout_postprocess(monkeypatch, actor):
     monkeypatch.setattr(
-        actor, "_postprocess", lambda result, tokenizer: {"post": result["reward"]}
+        actor,
+        "_postprocess",
+        lambda row, result, tokenizer, **_kwargs: {"post": result["reward"]},
     )
     monkeypatch.setattr(
         "nemo_rl.environments.sandbox.nemo_gym_actor._has_nan_generation_logprobs",
@@ -211,10 +241,16 @@ def _patch_rollout_postprocess(monkeypatch, actor):
 async def _stream(actor, examples):
     return [
         item
-        async for item in actor.run_rollouts(
-            examples, tokenizer=object(), timer_prefix="t"
-        )
+        async for item in actor.run_rollouts(examples, timer_prefix="t")
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_rollouts_requires_the_spinup_tokenizer():
+    actor = _rollout_actor(_FakeSession([]))
+    actor._tokenizer = None
+    with pytest.raises(RuntimeError, match="set_tokenizer must be called"):
+        await _stream(actor, [{"_rowidx": 0, "agent_ref": {"name": "agent_a"}}])
 
 
 @pytest.mark.asyncio
@@ -228,8 +264,8 @@ async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
     examples = [{"_rowidx": 7, "agent_ref": {"name": "agent_a"}}]
     streamed = await _stream(actor, examples)
 
-    assert streamed == [(7, {"post": 0.5}, streamed[0][2])]
-    assert "t/await_results" in streamed[0][2]
+    assert streamed == [(7, {"name": "agent_a"}, {"post": 0.5}, streamed[0][3])]
+    assert "t/await_results" in streamed[0][3]
     # The row went out tagged, which is what let the result come back joinable.
     assert session.posted[0][0][SG_EXAMPLE_ID] == 7
 
@@ -258,7 +294,7 @@ async def test_run_rollouts_pairs_by_rowidx_not_arrival_order(monkeypatch):
     examples = [{"_rowidx": i, "agent_ref": {"name": "agent_a"}} for i in range(4)]
     streamed = await _stream(actor, examples)
 
-    assert [(rowidx, result["post"]) for rowidx, result, _ in streamed] == [
+    assert [(rowidx, result["post"]) for rowidx, _, result, _ in streamed] == [
         (0, 0.0),
         (1, 1.0),
         (2, 2.0),
