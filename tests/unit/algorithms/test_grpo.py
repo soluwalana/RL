@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import math
 import os
 import warnings
@@ -5496,6 +5497,11 @@ def test_grpo_train_shutdown_on_epoch_completion(mock_grpo_components, tmp_path)
         )
 
     checkpointer.begin_finalization.assert_called_once()
+    on_success = checkpointer.begin_finalization.call_args.kwargs["on_success"]
+    status_path = tmp_path / "latest_checkpoint_status.json"
+    assert not status_path.exists()
+    on_success()
+    assert json.loads(status_path.read_text())["last_checkpoint_step"] == 1
     checkpointer.shutdown.assert_called_once()
 
 

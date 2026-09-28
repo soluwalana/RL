@@ -4515,13 +4515,11 @@ def _grpo_train_impl(
                         checkpointer.begin_finalization(
                             checkpoint_path,
                             wait_fn=policy.finalize_async_save,
-                        )
-
-                        # Record last-successful-checkpoint time/step for external
-                        # monitoring (parity with async_grpo_train; see
-                        # _write_latest_checkpoint_status).
-                        _write_latest_checkpoint_status(
-                            checkpointer, last_checkpoint_step=total_steps + 1
+                            on_success=lambda saved_step=total_steps + 1: (
+                                _write_latest_checkpoint_status(
+                                    checkpointer, last_checkpoint_step=saved_step
+                                )
+                            ),
                         )
 
             # Logging
@@ -6465,12 +6463,11 @@ def async_grpo_train(
                         checkpointer.begin_finalization(
                             checkpoint_path,
                             wait_fn=policy.finalize_async_save,
-                        )
-
-                        # Record last-successful-checkpoint time/step for external
-                        # monitoring (see _write_latest_checkpoint_status).
-                        _write_latest_checkpoint_status(
-                            checkpointer, last_checkpoint_step=step + 1
+                            on_success=lambda saved_step=step + 1: (
+                                _write_latest_checkpoint_status(
+                                    checkpointer, last_checkpoint_step=saved_step
+                                )
+                            ),
                         )
 
                     # On save-bound steps, engine stayed asleep after training;
