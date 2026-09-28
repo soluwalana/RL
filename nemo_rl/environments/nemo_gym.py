@@ -1935,6 +1935,7 @@ def _build_sandboxed_gym_actor(
     *,
     base_urls: list[str],
     model_name: str,
+    tokenizer: PreTrainedTokenizerBase,
     enable_router_replay: bool,
     use_fastokens: bool,
     token_capture: Optional[dict[str, Any]],
@@ -1942,8 +1943,7 @@ def _build_sandboxed_gym_actor(
     """Provision ``SandboxedGymActor`` instead of the colocated ``NemoGym`` actor.
 
     The sandbox keys are peeled off first so the remainder is still a Gym global
-    config. This actor takes the tokenizer per rollout, so spinup does not call
-    ``set_tokenizer``.
+    config. The tokenizer is installed once after spinup, same as ``NemoGym``.
     """
     from sandboxed_gym.host.models import NemoGymSandboxedConfig
     from nemo_rl.environments.sandbox.nemo_gym_actor import (
@@ -1982,6 +1982,7 @@ def _build_sandboxed_gym_actor(
     shard_set = NemoGymShardSet(handles={DEFAULT_SHARD_NAME: [actor]})
     try:
         ray.get(actor._spinup.remote())
+        ray.get(actor.set_tokenizer.remote(tokenizer))
     except BaseException:
         shard_set.shutdown(
             timeout=NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S,
@@ -2029,6 +2030,7 @@ def build_nemo_gym_actors(
             nemo_gym_dict,
             base_urls=base_urls,
             model_name=model_name,
+            tokenizer=tokenizer,
             enable_router_replay=enable_router_replay,
             use_fastokens=use_fastokens,
             token_capture=token_capture,
