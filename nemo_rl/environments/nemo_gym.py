@@ -914,9 +914,13 @@ class NemoGym(EnvironmentInterface):
             environment_path, offline=bool(self.cfg.get("environment_offline", False))
         )
 
-        from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
+        from nemo_gym.cli.env import RunHelper
+        from nemo_gym.config_types import BaseServerConfig
+        from nemo_gym.global_config import (
+            HEAD_SERVER_KEY_NAME,
+            GlobalConfigDictParserConfig,
+        )
         from nemo_gym.rollout_collection import RolloutCollectionHelper
-        from nemo_gym.server_utils import HEAD_SERVER_KEY_NAME, BaseServerConfig
         from omegaconf import DictConfig
 
         RELATIVE_PATH = "nemo_rl/environments/nemo_gym.py"
