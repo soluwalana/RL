@@ -336,7 +336,8 @@ def _patch_spinup(monkeypatch, started, cleanups, session):
     )
 
 
-def test_spinup_starts_a_session_and_registers_cleanup(monkeypatch):
+@pytest.mark.asyncio
+async def test_spinup_starts_a_session_and_registers_cleanup(monkeypatch):
     session = _FakeSession([])
     started: dict = {}
     cleanups: list = []
@@ -344,15 +345,17 @@ def test_spinup_starts_a_session_and_registers_cleanup(monkeypatch):
 
     actor = _actor_class().__new__(_actor_class())
     actor.__init__(_actor_cfg())
-    actor._spinup()
+    await actor._spinup()
 
     assert actor._session is session
     assert started["cfg"].job_id == "job-1"
     assert started["cfg"].sandbox.image == "runtime:dev"
-    assert cleanups == [actor.shutdown]
+    # atexit cannot await, so the registered hook is the blocking teardown.
+    assert cleanups == [actor._shutdown_blocking]
 
 
-def test_spinup_hosts_the_broker_in_its_own_ray_actor(monkeypatch):
+@pytest.mark.asyncio
+async def test_spinup_hosts_the_broker_in_its_own_ray_actor(monkeypatch):
     """The broker serves every episode `exec`; sharing this process's GIL is what we avoid.
 
     Asserts a broker is supplied at all -- the orchestrator's default is in-process, so passing
@@ -363,21 +366,22 @@ def test_spinup_hosts_the_broker_in_its_own_ray_actor(monkeypatch):
 
     actor = _actor_class().__new__(_actor_class())
     actor.__init__(_actor_cfg())
-    actor._spinup()
+    await actor._spinup()
 
     assert isinstance(started["broker"], RayEpisodeBroker)
     # Pinned to this actor's node, so the broker hop stays local.
     assert started["broker"]._node_id == "node-1"
 
 
-def test_spinup_rejects_a_config_that_is_not_sandboxed():
+@pytest.mark.asyncio
+async def test_spinup_rejects_a_config_that_is_not_sandboxed():
     actor = _actor_class().__new__(_actor_class())
     cfg = _actor_cfg()
     cfg["sandboxed"] = {"sandboxed": False}
     actor.__init__(cfg)
 
     with pytest.raises(ValueError, match="sandboxed=true"):
-        actor._spinup()
+        await actor._spinup()
 
 
 def test_build_serve_config_honors_the_venv_override(monkeypatch):
@@ -390,13 +394,27 @@ def test_build_serve_config_honors_the_venv_override(monkeypatch):
     assert serve_cfg.sandbox.entrypoint[2] == "/opt/ray_venvs/custom"
 
 
-def test_shutdown_closes_the_session_once():
+@pytest.mark.asyncio
+async def test_shutdown_closes_the_session_once():
     session = _FakeSession([])
     actor = _actor_class().__new__(_actor_class())
     actor._session = session
 
-    actor.shutdown()
-    actor.shutdown()
+    await actor.shutdown()
+    await actor.shutdown()
+
+    assert session.shutdowns == 1
+    assert actor._session is None
+
+
+def test_shutdown_blocking_closes_the_session_once():
+    """atexit and signal handlers call this directly; a second call must be a no-op."""
+    session = _FakeSession([])
+    actor = _actor_class().__new__(_actor_class())
+    actor._session = session
+
+    actor._shutdown_blocking()
+    actor._shutdown_blocking()
 
     assert session.shutdowns == 1
     assert actor._session is None
