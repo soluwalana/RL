@@ -263,7 +263,10 @@ class SandboxedGymActor(EnvironmentInterface):
                 SandboxedGymOrchestrator().start,
                 serve_cfg,
                 # Pinned to this actor's node so the hop stays local; the Gym host reaches it
-                # over HTTP regardless, and is never given a Ray handle.
+                # over HTTP regardless, and is never given a Ray handle. Deliberately no
+                # runtime_env of its own: the broker inherits this actor's, which carries the
+                # episode-backend credential (OPEN_SANDBOX_API_KEY). That credential must never
+                # reach the job sandbox.
                 broker=RayEpisodeBroker(
                     serve_cfg.broker_config(),
                     node_id=ray.get_runtime_context().get_node_id(),
