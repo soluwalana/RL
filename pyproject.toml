@@ -140,7 +140,9 @@ automodel = [
   # Colocated with vLLM engines (CUDA-IPC refit); must share vLLM's torch ABI.
   "torch==2.13.0",
   "torchvision==0.28.0",
-  "nemo-automodel[moe]",
+  # moe is the expert stack. vlm is the vision-language imports (backoff, numba,
+  # timm, open-clip, ...) without vlm-media or diffusion-media, which pull FFmpeg.
+  "nemo-automodel[moe,vlm]",
   # Automodel's FLA kernels require this TileLang version on Hopper.
   # Keep this scoped to the automodel fork; sglang intentionally pins TileLang 0.1.8.
   "tilelang==0.1.11; sys_platform == 'linux' and platform_machine == 'x86_64'",
