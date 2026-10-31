@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 4
 requires-python = ">=3.13.14, <3.14"
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -60,15 +60,16 @@ members = [
     "template-project",
 ]
 constraints = [
-    { name = "aiohttp", specifier = ">=3.13.3" },
+    { name = "aiohttp", specifier = ">=3.14.3" },
     { name = "av", specifier = ">=17.1.0" },
     { name = "brotli", specifier = ">=1.2.0" },
     { name = "cbor2", specifier = ">=5.9.0" },
-    { name = "cryptography", specifier = ">=48.0.1" },
+    { name = "connectrpc", specifier = "<0.12" },
     { name = "diffusers", specifier = ">=0.38.0" },
     { name = "dulwich", specifier = ">=1.2.5" },
     { name = "emerging-optimizers", git = "https://github.com/NVIDIA-NeMo/Emerging-Optimizers.git?rev=v0.3.0" },
     { name = "fast-hadamard-transform", git = "https://github.com/Dao-AILab/fast-hadamard-transform.git?rev=f134af63deb2df17e1171a9ec1ea4a7d8604d5ca" },
+    { name = "gitpython", specifier = ">=3.1.58" },
     { name = "megatron-fsdp", git = "https://github.com/yuhezhang-ai/Megatron-LM.git?subdirectory=megatron%2Fcore%2Fdistributed%2Ffsdp%2Fsrc&rev=455389c480af6b3acdca74c7830c68b3274eb083" },
     { name = "onnx", specifier = ">=1.21.0rc4" },
     { name = "opencv-python-headless", specifier = ">=5.0.0" },
@@ -87,6 +88,7 @@ constraints = [
 overrides = [
     { name = "apache-tvm-ffi", specifier = "==0.1.11" },
     { name = "av", marker = "sys_platform == 'never'" },
+    { name = "cryptography", specifier = ">=50.0.0" },
     { name = "decord2", marker = "sys_platform == 'never'" },
     { name = "deep-ep", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.133.0,<0.137.0" },
@@ -292,6 +294,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/6f/6d/d89e846a5444b3d5eb8985a6ddb0daef3774928e1bfbce8e84ec97b0ffa7/aiohttp_cors-0.8.1.tar.gz", hash = "sha256:ccacf9cb84b64939ea15f859a146af1f662a6b1d68175754a07315e305fb1403", size = 38626, upload-time = "2025-03-31T14:16:20.048Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/98/3b/40a68de458904bcc143622015fff2352b6461cd92fd66d3527bf1c6f5716/aiohttp_cors-0.8.1-py3-none-any.whl", hash = "sha256:3180cf304c5c712d626b9162b195b1db7ddf976a2a25172b35bb2448b890a80d", size = 25231, upload-time = "2025-03-31T14:16:18.478Z" },
+]
+
+[[package]]
+name = "aiohttp-retry"
+version = "2.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/61/ebda4d8e3d8cfa1fd3db0fb428db2dd7461d5742cea35178277ad180b033/aiohttp_retry-2.9.1.tar.gz", hash = "sha256:8eb75e904ed4ee5c2ec242fefe85bf04240f685391c4879d8f541d6028ff01f1", size = 13608, upload-time = "2024-11-06T10:44:54.574Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/99/84ba7273339d0f3dfa57901b846489d2e5c2cd731470167757f1935fffbd/aiohttp_retry-2.9.1-py3-none-any.whl", hash = "sha256:66d2759d1921838256a05a3f80ad7e724936f083e35be5abb5e16eed6be6dc54", size = 9981, upload-time = "2024-11-06T10:44:52.917Z" },
 ]
 
 [[package]]
@@ -617,6 +631,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/65/318323f98dbee45d42dff61d8f047181bc6f2268a9068cfad035a46be5af/beautifulsoup4-4.15.0.tar.gz", hash = "sha256:288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7", size = 632571, upload-time = "2026-06-07T16:44:20.453Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/c6/92fcd42f1ba33e1184263f25bfabf3d27c383410470f169e4b8163bf9c17/beautifulsoup4-4.15.0-py3-none-any.whl", hash = "sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9", size = 109924, upload-time = "2026-06-07T16:44:21.566Z" },
+]
+
+[[package]]
+name = "bidict"
+version = "0.24.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a8/f2/8d2dd8276ca05e1f5157b6a0d34efb2f585f47a0fbed61e8aad04b221f0b/bidict-0.24.1.tar.gz", hash = "sha256:4dca6c17f0b01700e9f24359daa5ebabf7be022d99f4cb2a257b6af2a5076c88", size = 30818, upload-time = "2026-08-25T23:45:52.214Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/53/2a3c7d562271ec6b6e38e7216b3104899f8aa4180c0713cb8aaf69e29cd5/bidict-0.24.1-py3-none-any.whl", hash = "sha256:fd3eaa737917d8a14f4baa391670c433c4e3f6f5fd2cd99d4bf436437f432364", size = 36175, upload-time = "2026-08-25T23:45:51.096Z" },
 ]
 
 [[package]]
@@ -947,6 +970,19 @@ wheels = [
 ]
 
 [[package]]
+name = "connectrpc"
+version = "0.11.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf-py" },
+    { name = "pyqwest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/b5/63e14ab9d4d4cc58818562db4120a35fa7454e3035633da41bdc6b712abd/connectrpc-0.11.1.tar.gz", hash = "sha256:18277f7838847b4271ca38d40c7d2387b5a2ea6a29f240689c19e1ec84aaff66", size = 46222, upload-time = "2026-07-15T06:33:31.601Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/ac/aa647675812cd075f2cb9acb00d62f4f2cbcbc6736049a62342b7371ce5b/connectrpc-0.11.1-py3-none-any.whl", hash = "sha256:8a52e2e92a485fa9681c1101a79a5ebeb31807e3ea3d5aabd41f484a6398bc7b", size = 64991, upload-time = "2026-07-15T06:33:29.396Z" },
+]
+
+[[package]]
 name = "contourpy"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1236,6 +1272,134 @@ wheels = [
 ]
 
 [[package]]
+name = "daytona"
+version = "0.224.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiofiles" },
+    { name = "aiohttp" },
+    { name = "daytona-analytics-api-client" },
+    { name = "daytona-analytics-api-client-async" },
+    { name = "daytona-api-client" },
+    { name = "daytona-api-client-async" },
+    { name = "daytona-toolbox-api-client" },
+    { name = "daytona-toolbox-api-client-async" },
+    { name = "deprecated", version = "1.3.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "httpx" },
+    { name = "httpx-ws" },
+    { name = "obstore" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation-aiohttp-client" },
+    { name = "opentelemetry-sdk" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "python-multipart" },
+    { name = "python-socketio", extra = ["asyncio-client", "client"], marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
+    { name = "toml" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
+    { name = "wsproto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/01/34/dd784c80632cbb6d33da93f1ee932036f7e6c10355e795c301ff082777bf/daytona-0.224.0.tar.gz", hash = "sha256:1b17c22b7af051b3d9bfa65c831ab9959addc4b1e7bee07f36e5cedb507ec8f2", size = 199712, upload-time = "2026-10-12T15:17:07.831Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/57/483386985371b0e2b3741c99b4c493cbe7adf5d4566ead075efbec823f15/daytona-0.224.0-py3-none-any.whl", hash = "sha256:cfdc4bad1f35238d5728438b3db19ba354d30e81c1e401037d161d3653e01041", size = 236976, upload-time = "2026-10-12T15:17:09.349Z" },
+]
+
+[[package]]
+name = "daytona-analytics-api-client"
+version = "0.224.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a1/1e/36e8b401b3fdb085f8f472d36fb7e1bb98fc4ed218de83c9fdff56c322d6/daytona_analytics_api_client-0.224.0.tar.gz", hash = "sha256:68a68c6822929ef8b2693bea3b941c8a628f7a310f2ff6fc759bb460162cd462", size = 30165, upload-time = "2026-10-12T15:16:43.902Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/6d/220797bb1496852a60db99b4ca25c9a734fcc6f631464e5e68cbe8ebb5ed/daytona_analytics_api_client-0.224.0-py3-none-any.whl", hash = "sha256:8261145c50c386a430e60f2876deb97bf9021be84842432fb1fb6b97d9fd1d65", size = 45025, upload-time = "2026-10-12T15:16:45.284Z" },
+]
+
+[[package]]
+name = "daytona-analytics-api-client-async"
+version = "0.224.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "aiohttp-retry" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/b5/c510042e2b10c15cbe64eab1da898c7a1d77273f20a101843cc4dba5e943/daytona_analytics_api_client_async-0.224.0.tar.gz", hash = "sha256:0d7c998346a228067d99c8994f0dc0fda59bb66590ab669e89475b2865fa5a7d", size = 30195, upload-time = "2026-10-12T15:16:42.986Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/77/8fde9764e5fe672892c7407252d7d5fc714105d368191754d6f7c7f88bc4/daytona_analytics_api_client_async-0.224.0-py3-none-any.whl", hash = "sha256:233be8520bc4520dc3d69bab696ca8a0c44dd1b49d6e71cf46d891029659d595", size = 45295, upload-time = "2026-10-12T15:16:44.668Z" },
+]
+
+[[package]]
+name = "daytona-api-client"
+version = "0.224.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a3/88/96f42b51390796f9f8cf3c595a609ed873d6b369c5ea2e684e9586991fd4/daytona_api_client-0.224.0.tar.gz", hash = "sha256:b3dc913a66f7293d0529d3e2260650f4ea76d877392875152dfd3075a0f76ac6", size = 135926, upload-time = "2026-10-12T15:16:39.205Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/1b/6a5e89c7f7a8e4e8b31e88359b7b2e1ce88d8bd7f4b788fed81da1ea21cd/daytona_api_client-0.224.0-py3-none-any.whl", hash = "sha256:2c94613547316a4417c65759d3b7ae598910e24e70c14bab5b966706b95cc0ca", size = 349119, upload-time = "2026-10-12T15:16:41.647Z" },
+]
+
+[[package]]
+name = "daytona-api-client-async"
+version = "0.224.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "aiohttp-retry" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ca/27/4bc408359bf5cdd6e647926564ed1806a3eb57c469a8a3a3f82ab5d0a1ad/daytona_api_client_async-0.224.0.tar.gz", hash = "sha256:fcfa19a044c0664477ecac99ddda101d343ed7760b0a21c88e4ea42a9fb9fa58", size = 136376, upload-time = "2026-10-12T15:16:38.774Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/42/4d/23358038fa7293d988aeab2c954a8fa962a03dd07ee155a8ca3221db9441/daytona_api_client_async-0.224.0-py3-none-any.whl", hash = "sha256:767944acd09a468ed6f3d68b7205c5437ce68265969cb3fe17dfcc5dea685bd7", size = 351913, upload-time = "2026-10-12T15:16:39.968Z" },
+]
+
+[[package]]
+name = "daytona-toolbox-api-client"
+version = "0.224.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8f/75/0f6ce20fd2cdbb92081b713e197fc9cd9872b8eee3e2a487f4839ac55fc2/daytona_toolbox_api_client-0.224.0.tar.gz", hash = "sha256:d8b715554664dda9d7f4e0d27aaa05d24315a82fba3dccc1d42218f1ce9f7aea", size = 90469, upload-time = "2026-10-12T15:16:38.764Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/1e/edff15039572889a8c31256c38fff29492c3aa1d49934039ba6d4c29bf0a/daytona_toolbox_api_client-0.224.0-py3-none-any.whl", hash = "sha256:cdb3ee62eaa4e22ff3509f92073ea683a86afec23923d440fbf4d2d031c35860", size = 263117, upload-time = "2026-10-12T15:16:40.758Z" },
+]
+
+[[package]]
+name = "daytona-toolbox-api-client-async"
+version = "0.224.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "aiohttp-retry" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/3a/71cdf7e42e5ac35a266b2f24b5a45df1bf5f8455fd6a68c43c6058ef255b/daytona_toolbox_api_client_async-0.224.0.tar.gz", hash = "sha256:9c33dc8144b145897e1fdf7a0d10f7c930f79461ca49340b3a77c6a1e1449408", size = 84121, upload-time = "2026-10-12T15:16:44.864Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/fc/2dde020063a3a80054f95624e88d1fd1a9c2468feec689ec8cf58de48890/daytona_toolbox_api_client_async-0.224.0-py3-none-any.whl", hash = "sha256:1695d0649835a7e40e725a1c83c2bc36a19da73fc57cf247a99d7ee70168412a", size = 261666, upload-time = "2026-10-12T15:16:46.816Z" },
+]
+
+[[package]]
 name = "debugpy"
 version = "1.8.22"
 source = { registry = "https://pypi.org/simple" }
@@ -1285,10 +1449,30 @@ wheels = [
 
 [[package]]
 name = "deprecated"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "platform_machine == 'aarch64' and sys_platform == 'linux'",
+]
+dependencies = [
+    { name = "wrapt", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb70572b6c2ef13c90c88fd190debda93b23f026b25f9634/deprecated-1.3.1.tar.gz", hash = "sha256:b1b50e0ff0c1fddaa5708a2c6b0a6588bb09b892825ab2b214ac9ea9d92a5223", size = 2932523, upload-time = "2025-10-30T08:19:02.757Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/d0/205d54408c08b13550c733c4b85429e7ead111c7f0014309637425520a9a/deprecated-1.3.1-py2.py3-none-any.whl", hash = "sha256:597bfef186b6f60181535a29fbe44865ce137a5079f295b479886c82729d5f3f", size = 11298, upload-time = "2025-10-30T08:19:00.758Z" },
+]
+
+[[package]]
+name = "deprecated"
 version = "3.0.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "platform_machine == 'aarch64' and sys_platform == 'linux'",
+]
 dependencies = [
-    { name = "wrapt", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-modelopt' or extra == 'extra-7-nemo-rl-nemo-gym' or extra == 'extra-7-nemo-rl-nvrx' or extra == 'extra-7-nemo-rl-sglang' or extra != 'extra-7-nemo-rl-trtllm' or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
+    { name = "wrapt", marker = "extra == 'extra-7-nemo-rl-sglang' or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-mcore') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f7/9c/16649913bf14c73e0a9453782e148362ff2657067deff6aa9c7ebcddcc31/deprecated-3.0.0.tar.gz", hash = "sha256:16850204d3a1e6bb0acd06bff48d96e8b0a0d25d1c52f71705405a0f4894192d", size = 166912, upload-time = "2026-09-26T13:58:10.675Z" }
 wheels = [
@@ -1457,6 +1641,38 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/f7/1291d8bf56f42ccb391a6a08c07e0f9645d6098031d5389c8a2177fc8582/dulwich-1.2.15-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:38b66910c0bc78c59964ef665df657833a4372ab6a4e5ae2969d8c49d9769687", size = 1536850, upload-time = "2026-09-14T21:19:31.638Z" },
     { url = "https://files.pythonhosted.org/packages/00/c0/16c7707f832b07f0b625a0f52d4a618e3c7530a81145c18ca746aa6014a9/dulwich-1.2.15-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:82d4511bec54b72baca40b728f3fcff3b00ab3d2281cfe4fd21c59d7e689406e", size = 1511293, upload-time = "2026-09-14T21:19:33.35Z" },
     { url = "https://files.pythonhosted.org/packages/3a/96/b4c8f1cf6c69811098415903ec299cdea87576c51b0c1f13f21215368c63/dulwich-1.2.15-py3-none-any.whl", hash = "sha256:5c863992962bab0fc5f75be132399a16f670f2a9283faf9aaeb953fd8891db83", size = 733132, upload-time = "2026-09-14T21:20:22.697Z" },
+]
+
+[[package]]
+name = "e2b"
+version = "2.56.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "connectrpc" },
+    { name = "e2b-dockerfile-utils" },
+    { name = "h2" },
+    { name = "httpx" },
+    { name = "packaging" },
+    { name = "protobuf-py" },
+    { name = "pyqwest" },
+    { name = "python-dateutil" },
+    { name = "rich" },
+    { name = "typing-extensions" },
+    { name = "wcmatch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/ca/8a4d0c088f2f4eaf2647fe257cadc0b0739b2a4b8d86c6959dd6efecd422/e2b-2.56.0.tar.gz", hash = "sha256:942a5b0a915e4125bb4cad0aaa17fb3dc891d3b43e31fb8e2fb5ac24b0fef394", size = 239747, upload-time = "2026-10-13T15:01:55.256Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/ec/17bee489c285b555a83a3360da1e4eeedaf7c5c767de4038cf9503104faa/e2b-2.56.0-py3-none-any.whl", hash = "sha256:acfb77c56a33daf1542362cab8048f062b578dffe7a48f32f87a4a3e0bef1e14", size = 400291, upload-time = "2026-10-13T15:01:53.831Z" },
+]
+
+[[package]]
+name = "e2b-dockerfile-utils"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/fc/15b2752ff08fcbb7c6b97451581e02dd189ddc9b6eb107bb17c35b04427f/e2b_dockerfile_utils-0.1.1.tar.gz", hash = "sha256:c1d4179bae6f3131fe0bbb1e6787ffb07c6c6dca8bdb3399abb3de9056b2a08f", size = 16844, upload-time = "2026-10-13T15:01:50.959Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/39/8d3f59a073dd1637fccca4c921665935d9591cc1726b452f06ef7cdadabc/e2b_dockerfile_utils-0.1.1-py3-none-any.whl", hash = "sha256:c648ecf56b3ffdb6d91469580850f4691f019cb2c925405e776ad36b761204f1", size = 19901, upload-time = "2026-10-13T15:01:49.942Z" },
 ]
 
 [[package]]
@@ -2006,21 +2222,6 @@ test = [
     { name = "pytest-timeout" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "diffusers", specifier = ">=0.37" },
-    { name = "nemo-rl", extras = ["automodel"], editable = "." },
-    { name = "paddleocr", specifier = ">=2.9,<3.0" },
-    { name = "paddlepaddle", specifier = ">=2.6" },
-]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "pytest", specifier = ">=7.0.0" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
-]
-
 [[package]]
 name = "fonttools"
 version = "4.65.0"
@@ -2311,8 +2512,8 @@ name = "h2"
 version = "4.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "hpack" },
-    { name = "hyperframe" },
+    { name = "hpack", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
+    { name = "hyperframe", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e7/85/7c366e69d84c17bb778fe41419e1fbcce3033d5b7ce29bbffff0a98b859f/h2-4.4.1.tar.gz", hash = "sha256:4e866ffb1a869ae14dd9b5e6beb5c24a13da0495ad72b65925ded182521c1516", size = 2157281, upload-time = "2026-08-03T11:45:09.509Z" }
 wheels = [
@@ -2457,6 +2658,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0f/4c/751061ffa58615a32c31b2d82e8482be8dd4a89154f003147acee90f2be9/httpx_sse-0.4.3.tar.gz", hash = "sha256:9b1ed0127459a66014aec3c56bebd93da3c1bc8bb6618c8082039a44889a755d", size = 15943, upload-time = "2025-10-10T21:48:22.271Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/fd/6668e5aec43ab844de6fc74927e155a3b37bf40d7c3790e49fc0406b6578/httpx_sse-0.4.3-py3-none-any.whl", hash = "sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc", size = 8960, upload-time = "2025-10-10T21:48:21.158Z" },
+]
+
+[[package]]
+name = "httpx-ws"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpcore" },
+    { name = "httpx" },
+    { name = "wsproto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cd/cd/ca91a07ae446451f7476bf3fcc909e98cb942ff032ebfda0e3fe449aca7b/httpx_ws-0.9.0.tar.gz", hash = "sha256:797373326f70eec1ae96f6e43ae9f12002fd7d73aee139a4985eaab964338a08", size = 107105, upload-time = "2026-03-28T14:11:10.781Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/f8/a6bc80313a9e93c888fa10534dfce2ad76ff86911b6f485777ce6de6a073/httpx_ws-0.9.0-py3-none-any.whl", hash = "sha256:71640d2fb1bf9a225775015b33cd755cfd4c5f7e21c885192fe3adc4c387b248", size = 15759, upload-time = "2026-03-28T14:11:11.887Z" },
 ]
 
 [[package]]
@@ -2957,7 +3173,8 @@ name = "limits"
 version = "5.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "deprecated", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-modelopt' or extra == 'extra-7-nemo-rl-nemo-gym' or extra == 'extra-7-nemo-rl-nvrx' or extra == 'extra-7-nemo-rl-sglang' or extra != 'extra-7-nemo-rl-trtllm' or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
+    { name = "deprecated", version = "1.3.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
+    { name = "deprecated", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-nemo-rl-sglang' or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-mcore') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
     { name = "packaging", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-modelopt' or extra == 'extra-7-nemo-rl-nemo-gym' or extra == 'extra-7-nemo-rl-nvrx' or extra == 'extra-7-nemo-rl-sglang' or extra != 'extra-7-nemo-rl-trtllm' or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
     { name = "typing-extensions", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-modelopt' or extra == 'extra-7-nemo-rl-nemo-gym' or extra == 'extra-7-nemo-rl-nvrx' or extra == 'extra-7-nemo-rl-sglang' or extra != 'extra-7-nemo-rl-trtllm' or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
@@ -3236,94 +3453,6 @@ te = [
     { name = "megatron-core", extra = ["te"], marker = "extra == 'extra-7-nemo-rl-mcore' or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "accelerate" },
-    { name = "causal-conv1d", marker = "extra == 'ssm'" },
-    { name = "comet-ml", specifier = ">=3.50.0" },
-    { name = "datasets", specifier = ">=2.20.0" },
-    { name = "diffusers", specifier = ">=0.36.0" },
-    { name = "einops" },
-    { name = "fast-hadamard-transform", specifier = ">=1.1.0" },
-    { name = "flash-linear-attention" },
-    { name = "flashinfer-cubin", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/" },
-    { name = "flashinfer-python", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/" },
-    { name = "hydra-core", specifier = ">=1.3.4,<1.4" },
-    { name = "librosa", marker = "extra == 'audio'" },
-    { name = "mamba-ssm", marker = "extra == 'ssm'", specifier = "==2.3.1" },
-    { name = "megatron-core", extras = ["dev", "inference", "mlm", "te"], editable = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" },
-    { name = "megatron-core", extras = ["te"], marker = "extra == 'te'", editable = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" },
-    { name = "mistral-common", specifier = ">=1.10.0" },
-    { name = "mlflow", specifier = ">=3.16.0" },
-    { name = "nemo-run", marker = "extra == 'recipes'" },
-    { name = "nvdlfw-inspect", marker = "extra == 'tensor-inspect'", specifier = "==0.2.1" },
-    { name = "nvidia-resiliency-ext" },
-    { name = "omegaconf", specifier = ">=2.3.0" },
-    { name = "open-clip-torch", specifier = ">=3.2.0" },
-    { name = "opencv-python-headless", marker = "extra == 'bagel'", specifier = ">=4.7.0.72" },
-    { name = "peft", specifier = ">=0.20.0,<=0.21.0" },
-    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=14.0.0" },
-    { name = "pyyaml", specifier = ">=6.0.2" },
-    { name = "qwen-vl-utils" },
-    { name = "regex", specifier = ">=2024.11.6" },
-    { name = "rich" },
-    { name = "safetensors", marker = "extra == 'bagel'", specifier = ">=0.4.5" },
-    { name = "six", specifier = ">=1.17.0" },
-    { name = "tensorboard", specifier = ">=2.19.0" },
-    { name = "tilelang", marker = "extra == 'ssm'", specifier = ">=0.1.9" },
-    { name = "timm" },
-    { name = "torch", specifier = ">=2.6.0" },
-    { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "transformers", specifier = ">=5.15,<5.20" },
-    { name = "typing-extensions" },
-    { name = "wandb", specifier = ">=0.29.0" },
-]
-provides-extras = ["bagel", "recipes", "parquet", "tensor-inspect", "te", "ssm", "audio"]
-
-[package.metadata.requires-dev]
-build = [
-    { name = "cython", specifier = ">=3.0.0" },
-    { name = "ninja" },
-    { name = "numpy" },
-    { name = "nvidia-cudnn-frontend", specifier = ">=1.29.0" },
-    { name = "nvidia-mathdx" },
-    { name = "pybind11" },
-    { name = "setuptools" },
-    { name = "torch" },
-]
-dev = [
-    { name = "mypy", specifier = ">=1.8.0" },
-    { name = "pre-commit", specifier = ">=3.6.0" },
-    { name = "ruff", specifier = ">=0.9.9" },
-]
-diffusion = [
-    { name = "av" },
-    { name = "imageio" },
-    { name = "imageio-ffmpeg" },
-]
-docs = [
-    { name = "myst-parser", specifier = ">=4.0.1" },
-    { name = "nvidia-sphinx-theme", specifier = ">=0.0.8" },
-    { name = "sphinx", specifier = ">=8.1.3" },
-    { name = "sphinx-autobuild", specifier = ">=2024.10.3" },
-    { name = "sphinx-autodoc2", specifier = ">=0.5.0" },
-    { name = "sphinx-copybutton", specifier = ">=0.5.2" },
-    { name = "sphinxcontrib-mermaid" },
-]
-no-pypi-wheels = [{ name = "flash-mla", git = "https://github.com/deepseek-ai/FlashMLA?rev=nv_dev" }]
-test = [
-    { name = "click" },
-    { name = "coverage", specifier = ">=7.8.1" },
-    { name = "flake8", specifier = ">=7.2.0" },
-    { name = "pygithub" },
-    { name = "pylint", specifier = ">=3.3.7" },
-    { name = "pytest", specifier = ">=8.3.5" },
-    { name = "pytest-mock", specifier = ">=3.14.0" },
-    { name = "pytest-runner", specifier = ">=6.0.1" },
-    { name = "pytest-shard", specifier = ">=0.1.2" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
-]
-
 [[package]]
 name = "megatron-core"
 source = { editable = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" }
@@ -3375,115 +3504,6 @@ mlm = [
 te = [
     { name = "transformer-engine", extra = ["core-cu13", "pytorch"], marker = "extra == 'extra-7-nemo-rl-mcore' or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", marker = "extra == 'mlm'" },
-    { name = "accelerate", marker = "extra == 'training'" },
-    { name = "av", marker = "extra == 'dev'" },
-    { name = "causal-conv1d", marker = "extra == 'ssm'", specifier = "~=1.5" },
-    { name = "datasets", marker = "extra == 'dev'" },
-    { name = "einops", marker = "extra == 'dev'", specifier = "~=0.8" },
-    { name = "emerging-optimizers", marker = "extra == 'dev'", git = "https://github.com/NVIDIA-NeMo/Emerging-Optimizers.git?rev=v0.3.0" },
-    { name = "fast-hadamard-transform", marker = "extra == 'dev'", git = "https://github.com/Dao-AILab/fast-hadamard-transform.git?rev=f134af63deb2df17e1171a9ec1ea4a7d8604d5ca" },
-    { name = "fastapi", marker = "extra == 'dev'", specifier = "~=0.50" },
-    { name = "flash-linear-attention", marker = "extra == 'ssm'", specifier = "==0.5.1" },
-    { name = "flashinfer-python", marker = "extra == 'dev'", specifier = ">=0.5.0,<0.7.0" },
-    { name = "flask-restful", marker = "extra == 'mlm'" },
-    { name = "flask-restful", marker = "extra == 'training'" },
-    { name = "gigatoken", marker = "extra == 'mlm'" },
-    { name = "gigatoken", marker = "extra == 'training'" },
-    { name = "hypercorn", marker = "extra == 'dev'" },
-    { name = "mamba-ssm", marker = "extra == 'ssm'", git = "https://github.com/state-spaces/mamba.git?rev=0048fbf2e7b2f214dcbe703ea3dec2b9647595e1" },
-    { name = "megatron-energon", extras = ["av-decode"], marker = "extra == 'dev'", specifier = "~=7.0" },
-    { name = "multi-storage-client", marker = "extra == 'dev'", specifier = "~=0.50" },
-    { name = "nemo-lens", marker = "extra == 'dev'", git = "https://github.com/NVIDIA-NeMo/Lens.git?rev=b85578fc2b736a1804705e537001b5f45e9c715d" },
-    { name = "nemo-lens", extras = ["sdk"], marker = "extra == 'otel'", git = "https://github.com/NVIDIA-NeMo/Lens.git?rev=b85578fc2b736a1804705e537001b5f45e9c715d" },
-    { name = "numpy" },
-    { name = "nvidia-cudnn-frontend", extras = ["cutedsl"], marker = "extra == 'dev'", specifier = "==1.29.0" },
-    { name = "nvidia-modelopt", extras = ["torch"], marker = "sys_platform != 'darwin' and extra == 'dev'", specifier = ">=0.47" },
-    { name = "nvidia-resiliency-ext", marker = "extra == 'dev'", specifier = "==0.7.0" },
-    { name = "omegaconf", marker = "extra == 'mlm'" },
-    { name = "omegaconf", marker = "extra == 'training'" },
-    { name = "onnxscript", marker = "extra == 'dev'" },
-    { name = "openai", extras = ["aiohttp"], marker = "extra == 'dev'" },
-    { name = "opentelemetry-api", marker = "extra == 'dev'", specifier = ">=1.33.1,<2" },
-    { name = "orjson", marker = "extra == 'dev'" },
-    { name = "packaging", specifier = ">=24.2" },
-    { name = "pillow", marker = "extra == 'dev'" },
-    { name = "quart", marker = "extra == 'dev'" },
-    { name = "sentencepiece", marker = "extra == 'mlm'" },
-    { name = "sentencepiece", marker = "extra == 'training'" },
-    { name = "tensorstore", marker = "extra == 'dev'", specifier = "~=0.1,!=0.1.46,!=0.1.72" },
-    { name = "tiktoken", marker = "extra == 'mlm'" },
-    { name = "tiktoken", marker = "extra == 'training'" },
-    { name = "torch", specifier = ">=2.6.0" },
-    { name = "torch-memory-saver", marker = "extra == 'inference'", git = "https://github.com/fzyzcjy/torch_memory_saver.git?rev=9bc9a442e6d108c7b7903def199896a005143aaf" },
-    { name = "tqdm", marker = "extra == 'dev'" },
-    { name = "transformer-engine", extras = ["core-cu13", "pytorch"], marker = "extra == 'te'", git = "https://github.com/NVIDIA/TransformerEngine.git?rev=44f31bbeaf99bd30a67b928000d4b980026debd2" },
-    { name = "transformers", marker = "extra == 'mlm'" },
-    { name = "transformers", marker = "extra == 'training'" },
-    { name = "wandb", marker = "extra == 'mlm'" },
-    { name = "wandb", marker = "extra == 'training'" },
-    { name = "wget", marker = "extra == 'dev'" },
-    { name = "zstandard", marker = "extra == 'dev'" },
-]
-provides-extras = ["training", "mlm", "dev", "inference", "otel", "lts", "te", "ssm"]
-
-[package.metadata.requires-dev]
-batch-invariant = [{ name = "deep-gemm", git = "https://github.com/deepseek-ai/DeepGEMM.git?rev=ea2b7805b97956268bed1adf94591f428ded6cc1" }]
-build = [
-    { name = "cython", specifier = ">=3.0.0" },
-    { name = "hatchling" },
-    { name = "nvidia-cudnn-frontend", specifier = ">=1.29.0" },
-    { name = "nvidia-mathdx" },
-    { name = "packaging", specifier = ">=24.2" },
-    { name = "pybind11" },
-    { name = "setuptools", specifier = ">=80" },
-    { name = "torch" },
-]
-ci = [
-    { name = "pandas" },
-    { name = "python-gitlab" },
-    { name = "slack-sdk" },
-]
-docs = [
-    { name = "myst-parser" },
-    { name = "nvidia-sphinx-theme" },
-    { name = "sphinx" },
-    { name = "sphinx-autobuild" },
-    { name = "sphinx-autodoc2" },
-    { name = "sphinx-copybutton" },
-]
-linting = [
-    { name = "black", specifier = "==26.3.0" },
-    { name = "flake8", specifier = "==7.1.0" },
-    { name = "isort", specifier = "==5.13.2" },
-    { name = "pylint", specifier = "==3.2.6" },
-    { name = "ruff", specifier = "~=0.9.0" },
-]
-no-pypi-wheels = [
-    { name = "deep-gemm", git = "https://github.com/deepseek-ai/DeepGEMM.git?rev=ea2b7805b97956268bed1adf94591f428ded6cc1" },
-    { name = "emerging-optimizers", git = "https://github.com/NVIDIA-NeMo/Emerging-Optimizers.git?rev=v0.3.0" },
-    { name = "flash-mla", git = "https://github.com/deepseek-ai/FlashMLA?rev=nv_dev" },
-]
-test = [
-    { name = "coverage" },
-    { name = "mock" },
-    { name = "nemo-run", git = "https://github.com/NVIDIA-NeMo/Run.git?rev=e3935393a290aed1822af52139b4b8ee270fed1f" },
-    { name = "nltk" },
-    { name = "pydantic" },
-    { name = "pygithub" },
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-    { name = "pytest-random-order" },
-    { name = "pyyaml" },
-    { name = "tensorboard" },
-    { name = "wrapt" },
-]
-testmon = [{ name = "pytest-testmon", specifier = "==2.2.0" }]
 
 [[package]]
 name = "megatron-energon"
@@ -3925,125 +3945,15 @@ moe = [
     { name = "tilelang", version = "0.1.12", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and extra == 'extra-7-nemo-rl-automodel') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-mcore') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
     { name = "transformer-engine", extra = ["core-cu13", "pytorch"], marker = "extra == 'extra-7-nemo-rl-automodel' or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "albumentations", marker = "extra == 'vlm-media'" },
-    { name = "apache-tvm-ffi", marker = "extra == 'cuda'", specifier = "<=0.1.11" },
-    { name = "av", marker = "extra == 'diffusion-media'" },
-    { name = "backoff", marker = "extra == 'vlm'" },
-    { name = "bitsandbytes", marker = "extra == 'cuda-source'" },
-    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.34" },
-    { name = "causal-conv1d", marker = "extra == 'cuda'" },
-    { name = "databricks-sql-connector", marker = "extra == 'delta-databricks'", specifier = ">=4.4.0" },
-    { name = "datasets", specifier = ">=4.0.0" },
-    { name = "decord", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin' and extra == 'vlm-media'" },
-    { name = "deep-ep", marker = "extra == 'moe'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=7febc6e25660af0f54d95dd781ecdcd62265ecca" },
-    { name = "deltalake", marker = "extra == 'delta-databricks'", specifier = ">=1.0.0" },
-    { name = "diffusers", marker = "extra == 'diffusion'", specifier = ">=0.39.0" },
-    { name = "ffpa-attn", marker = "extra == 'ffpa'", specifier = ">=0.2.2" },
-    { name = "flash-attn", marker = "extra == 'fa'", specifier = "<=2.8.3" },
-    { name = "flash-linear-attention", marker = "extra == 'fla'", specifier = ">=0.4.2" },
-    { name = "flashoptim", specifier = ">=0.1.3" },
-    { name = "ftfy", marker = "extra == 'diffusion'" },
-    { name = "imageio", marker = "extra == 'diffusion'" },
-    { name = "imageio-ffmpeg", marker = "extra == 'diffusion-media'" },
-    { name = "kernels", marker = "extra == 'diffusion-kernels'" },
-    { name = "mamba-ssm", marker = "extra == 'cuda'" },
-    { name = "megatron-fsdp", git = "https://github.com/yuhezhang-ai/Megatron-LM.git?subdirectory=megatron%2Fcore%2Fdistributed%2Ffsdp%2Fsrc&rev=455389c480af6b3acdca74c7830c68b3274eb083" },
-    { name = "mistral-common", marker = "extra == 'vlm'", specifier = ">=1.11.0" },
-    { name = "mistral-common", extras = ["audio", "hf-hub", "sentencepiece"] },
-    { name = "mlflow" },
-    { name = "multi-storage-client", marker = "extra == 'msc'", specifier = ">=0.13" },
-    { name = "nemo-automodel", extras = ["cli"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["cuda"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["cuda"], marker = "extra == 'moe'" },
-    { name = "nemo-automodel", extras = ["delta-databricks"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["diffusion"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["diffusion"], marker = "extra == 'diffusion-kernels'" },
-    { name = "nemo-automodel", extras = ["diffusion-media"], marker = "extra == 'media'" },
-    { name = "nemo-automodel", extras = ["extra"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["fla"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["fla"], marker = "extra == 'moe'" },
-    { name = "nemo-automodel", extras = ["s3"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["vlm"], marker = "extra == 'all'" },
-    { name = "nemo-automodel", extras = ["vlm-media"], marker = "extra == 'media'" },
-    { name = "nemo-run", marker = "extra == 'cli'" },
-    { name = "numba", marker = "extra == 'vlm'" },
-    { name = "numpy", marker = "extra == 'vlm'" },
-    { name = "nv-grouped-gemm", marker = "extra == 'cuda'" },
-    { name = "nvidia-cutlass-dsl", marker = "extra == 'ffpa'", specifier = "==4.6.0" },
-    { name = "onnxscript", marker = "extra == 'cuda'", specifier = ">=0.5.6" },
-    { name = "open-clip-torch", marker = "extra == 'vlm'" },
-    { name = "opencv-python-headless", marker = "extra == 'diffusion-media'", specifier = "==4.10.0.84" },
-    { name = "opencv-python-headless", marker = "extra == 'vlm-media'", specifier = "==4.10.0.84" },
-    { name = "perceptron", marker = "extra == 'extra'" },
-    { name = "pillow", marker = "extra == 'vlm'" },
-    { name = "pybind11" },
-    { name = "pyyaml" },
-    { name = "pyyaml", marker = "extra == 'cli'" },
-    { name = "quack-kernels", marker = "sys_platform == 'linux'", specifier = "==0.6.1" },
-    { name = "qwen-omni-utils", marker = "extra == 'vlm-media'" },
-    { name = "qwen-vl-utils", marker = "extra == 'vlm-media'" },
-    { name = "sentencepiece", marker = "extra == 'extra'" },
-    { name = "soundfile", marker = "extra == 'vlm'" },
-    { name = "tiktoken" },
-    { name = "tile-kernels", marker = "extra == 'cuda'", specifier = "==1.0.0" },
-    { name = "tilelang", marker = "extra == 'cuda'", specifier = ">=0.1.11" },
-    { name = "timm", marker = "extra == 'vlm'", specifier = "<=1.0.22" },
-    { name = "torch", marker = "sys_platform != 'darwin' and sys_platform != 'linux'", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torch", marker = "sys_platform == 'darwin'", specifier = ">=2.6.0", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torchao" },
-    { name = "torchdata" },
-    { name = "torchvision", marker = "sys_platform == 'darwin' and extra == 'diffusion'", index = "https://pypi.org/simple" },
-    { name = "torchvision", marker = "sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'diffusion'", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torchvision", marker = "sys_platform == 'linux' and extra == 'diffusion'", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "transformer-engine", extras = ["pytorch"], marker = "extra == 'cuda'", specifier = ">=2.14.1" },
-    { name = "transformers", specifier = "==5.12.1" },
-    { name = "wandb", specifier = ">=0.28.0" },
-]
-provides-extras = ["diffusion", "diffusion-kernels", "cuda", "cuda-source", "extra", "fa", "ffpa", "fla", "delta-databricks", "moe", "vlm", "cli", "s3", "msc", "vlm-media", "diffusion-media", "media", "all"]
-
-[package.metadata.requires-dev]
-build = [
-    { name = "packaging" },
-    { name = "psutil" },
-    { name = "setuptools" },
-    { name = "torch", marker = "sys_platform != 'darwin' and sys_platform != 'linux'", specifier = "<=2.10.0", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torch", marker = "sys_platform == 'darwin'", specifier = "<=2.10.0", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform == 'linux'", specifier = "<=2.10.0", index = "https://download.pytorch.org/whl/cu130" },
-]
-dev = [
-    { name = "cut-cross-entropy", git = "https://github.com/apple/ml-cross-entropy.git?rev=87a86aba72cfd2f0d8abecaf81c13c4528ea07d8" },
-    { name = "dion", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", git = "https://github.com/microsoft/dion.git" },
-    { name = "liger-kernel", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", git = "https://github.com/linkedin/Liger-Kernel.git?rev=1f1a4b8d6a6c3c1ddb3573a46480c41cef25bde6" },
-]
-docs = [
-    { name = "myst-parser" },
-    { name = "nvidia-sphinx-theme" },
-    { name = "sphinx" },
-    { name = "sphinx-autobuild" },
-    { name = "sphinx-autodoc2" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-design" },
-]
-linting = [
-    { name = "bandit", specifier = "~=1.9.0" },
-    { name = "import-linter", specifier = "~=2.4" },
-    { name = "pre-commit", specifier = ">=4.2.0" },
-    { name = "ruff", specifier = "~=0.9.0" },
-    { name = "ty", specifier = ">=0.0.20" },
-]
-magi = [{ name = "magi-attention", git = "https://github.com/SandAI-org/MagiAttention.git?rev=d7ea8afd44c790b65fab68a04a6a0fdd5adbf182" }]
-test = [
-    { name = "coverage" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", index = "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-13/pypi/simple/" },
-    { name = "peft", specifier = ">=0.18.1" },
-    { name = "pytest" },
-    { name = "pytest-shard" },
-    { name = "ruamel-yaml" },
-    { name = "sentence-transformers", specifier = ">=5.6.0" },
+vlm = [
+    { name = "backoff" },
+    { name = "mistral-common" },
+    { name = "numba", version = "0.65.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "numpy" },
+    { name = "open-clip-torch" },
+    { name = "pillow" },
+    { name = "soundfile" },
+    { name = "timm" },
 ]
 
 [[package]]
@@ -4083,80 +3993,13 @@ dependencies = [
     { name = "yappi" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.14.4" },
-    { name = "anthropic", specifier = "<=0.109.2" },
-    { name = "anyio", specifier = ">=4.15.1" },
-    { name = "boto3", marker = "extra == 'sandbox'", specifier = ">=1.34" },
-    { name = "coverage", extras = ["toml"], marker = "extra == 'dev'" },
-    { name = "datasets" },
-    { name = "daytona", marker = "extra == 'sandbox'", specifier = ">=0.179.0" },
-    { name = "defusedxml", marker = "extra == 'dev'", specifier = ">=0.7.1" },
-    { name = "devtools" },
-    { name = "e2b", marker = "extra == 'sandbox'", specifier = ">=2.46.0,<3.0.0" },
-    { name = "fastapi", specifier = "!=0.142.*" },
-    { name = "flashinfer-python", marker = "extra == 'vllm'", specifier = "==0.6.18" },
-    { name = "fonttools", specifier = ">=4.60.2" },
-    { name = "gitpython", marker = "extra == 'wandb'", specifier = ">=3.1.61" },
-    { name = "httptools" },
-    { name = "huggingface-hub", marker = "extra == 'dev'", specifier = "<2" },
-    { name = "hydra-core" },
-    { name = "itsdangerous" },
-    { name = "jinja2", marker = "extra == 'ray'", specifier = ">=3.1" },
-    { name = "jsonschema", specifier = ">=4.18,<5" },
-    { name = "mcp", specifier = ">=1.28.1,<3" },
-    { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.16.1" },
-    { name = "mlflow-skinny", marker = "extra == 'mlflow'", specifier = ">=3.16.1" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
-    { name = "nemo-gym", extras = ["dev", "mlflow", "ray", "sandbox", "wandb"], marker = "extra == 'all'" },
-    { name = "nemo-lens", extras = ["sdk"], marker = "extra == 'telemetry'", git = "https://github.com/NVIDIA-NeMo/Lens.git?rev=4d045c03186b90afdc815db46b671f6a21bc7e98" },
-    { name = "omegaconf" },
-    { name = "openai", specifier = "==2.44.0" },
-    { name = "opensandbox", marker = "extra == 'sandbox'", specifier = ">=0.1.15" },
-    { name = "openshell", marker = "extra == 'openshell'", specifier = ">=0.0.92,<0.1" },
-    { name = "opentelemetry-instrumentation-fastapi", marker = "extra == 'telemetry'", specifier = ">=0.60b0" },
-    { name = "orjson", specifier = ">=3.11.6" },
-    { name = "packaging", specifier = ">=24.2" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
-    { name = "psutil" },
-    { name = "pyarrow", marker = "extra == 'mlflow'", specifier = ">=23.0.1" },
-    { name = "pyasn1", specifier = ">=0.6.4" },
-    { name = "pydantic" },
-    { name = "pydantic-core" },
-    { name = "pydot" },
-    { name = "pyjwt", specifier = ">=2.15.1" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "python-multipart", specifier = ">=0.0.27" },
-    { name = "ray", extras = ["default"], marker = "extra == 'ray'", specifier = ">=2.58.0" },
-    { name = "requests" },
-    { name = "requests-mock", marker = "extra == 'dev'" },
-    { name = "requests" },
-    { name = "rich" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "scipy", specifier = ">=1.14.1" },
-    { name = "sqlparse", marker = "extra == 'mlflow'", specifier = ">=0.6.0" },
-    { name = "tenacity", marker = "extra == 'sandbox'", specifier = ">=9.1.4" },
-    { name = "tqdm" },
-    { name = "urllib3", specifier = ">=2.8.0" },
-    { name = "uvicorn" },
-    { name = "uvloop" },
-    { name = "vllm", marker = "extra == 'vllm'", specifier = "==0.29.0" },
-    { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.30.0" },
-    { name = "yappi", specifier = ">=1.7.6" },
-]
-provides-extras = ["all", "ray", "mlflow", "wandb", "vllm", "sandbox", "openshell", "telemetry", "dev"]
-
-[package.metadata.requires-dev]
-codec = [
-    { name = "opencv-python-headless" },
-    { name = "pynvvideocodec" },
-    { name = "torchaudio" },
-    { name = "torchcodec" },
-    { name = "torchvision" },
+[package.optional-dependencies]
+sandbox = [
+    { name = "boto3" },
+    { name = "daytona" },
+    { name = "e2b" },
+    { name = "opensandbox" },
+    { name = "tenacity" },
 ]
 
 [[package]]
@@ -4261,7 +4104,7 @@ automodel = [
     { name = "flash-attn" },
     { name = "mamba-ssm" },
     { name = "mistral-common" },
-    { name = "nemo-automodel", extra = ["moe"], marker = "extra == 'extra-7-nemo-rl-automodel' or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
+    { name = "nemo-automodel", extra = ["moe", "vlm"], marker = "extra == 'extra-7-nemo-rl-automodel' or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-modelopt' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nemo-gym' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-nvrx' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
     { name = "nv-grouped-gemm" },
     { name = "tilelang", version = "0.1.11", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64'" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
@@ -4294,7 +4137,8 @@ modelopt = [
     { name = "nvidia-modelopt", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-modelopt' or extra == 'extra-7-nemo-rl-nemo-gym' or extra == 'extra-7-nemo-rl-nvrx' or extra == 'extra-7-nemo-rl-sglang' or extra != 'extra-7-nemo-rl-trtllm' or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
 nemo-gym = [
-    { name = "nemo-gym" },
+    { name = "nemo-gym", extra = ["sandbox"], marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
+    { name = "nemo-sandboxed-gym", extra = ["opensandbox", "ray", "server"], marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
 ]
 nvrx = [
     { name = "nvidia-resiliency-ext" },
@@ -4380,180 +4224,28 @@ test = [
     { name = "pytest-timeout" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", specifier = ">=0.26" },
-    { name = "awscrt", specifier = ">=0.35.0" },
-    { name = "blobfile" },
-    { name = "causal-conv1d", marker = "extra == 'automodel'", git = "https://github.com/Dao-AILab/causal-conv1d?rev=4f6ae4e26ae5fe8af9372f8d312ab25cc4595223" },
-    { name = "causal-conv1d", marker = "extra == 'mcore'", git = "https://github.com/Dao-AILab/causal-conv1d?rev=4f6ae4e26ae5fe8af9372f8d312ab25cc4595223" },
-    { name = "colored", specifier = "==2.2.3" },
-    { name = "cuda-bindings", marker = "sys_platform != 'darwin'" },
-    { name = "cuda-python", marker = "extra == 'vllm'" },
-    { name = "cupy-cuda13x", marker = "extra == 'mcore'" },
-    { name = "datasets", specifier = ">=4.0.0" },
-    { name = "debugpy" },
-    { name = "deep-ep", marker = "extra == 'automodel'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
-    { name = "deep-ep", marker = "extra == 'mcore'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
-    { name = "deep-ep", marker = "extra == 'vllm'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
-    { name = "deep-gemm", marker = "extra == 'vllm'", git = "https://github.com/deepseek-ai/DeepGEMM.git?rev=67fc64863d43521080bf2005e6528d0fceee9510" },
-    { name = "fastokens", specifier = ">=0.2.0" },
-    { name = "flash-attn", marker = "extra == 'automodel'", specifier = "==2.8.1" },
-    { name = "flash-attn", marker = "extra == 'mcore'", specifier = "==2.8.1" },
-    { name = "flash-attn-4", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'mcore') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'mcore')", specifier = "==4.0.0b19" },
-    { name = "flash-mla", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'mcore') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'mcore')", git = "https://github.com/deepseek-ai/FlashMLA?rev=b7643bd54521f563b839b98289b5cd048c062ba2" },
-    { name = "flashinfer-cubin", marker = "extra == 'mcore'", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/" },
-    { name = "flashinfer-cubin", marker = "extra == 'sglang'", specifier = "==0.6.14", index = "https://flashinfer.ai/whl/" },
-    { name = "flashinfer-cubin", marker = "extra == 'vllm'", specifier = "==0.6.18", index = "https://flashinfer.ai/whl/" },
-    { name = "flashinfer-jit-cache", marker = "extra == 'mcore'", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/cu130" },
-    { name = "flashinfer-jit-cache", marker = "extra == 'sglang'", specifier = "==0.6.14", index = "https://flashinfer.ai/whl/cu130" },
-    { name = "flashinfer-jit-cache", marker = "extra == 'vllm'", specifier = "==0.6.18", index = "https://flashinfer.ai/whl/cu130" },
-    { name = "flashinfer-python", marker = "extra == 'mcore'", specifier = "==0.6.18.post1" },
-    { name = "flashinfer-python", marker = "extra == 'sglang'", specifier = "==0.6.14" },
-    { name = "flashinfer-python", marker = "extra == 'vllm'", specifier = "==0.6.18" },
-    { name = "hydra-core" },
-    { name = "kernels", marker = "extra == 'sglang'", specifier = ">=0.14.1,<0.15" },
-    { name = "mamba-ssm", marker = "extra == 'automodel'", git = "https://github.com/state-spaces/mamba.git?rev=a14b1dff0454a3bc27d9eb31355dc01e4b2490ec" },
-    { name = "mamba-ssm", marker = "extra == 'mcore'", git = "https://github.com/state-spaces/mamba.git?rev=a14b1dff0454a3bc27d9eb31355dc01e4b2490ec" },
-    { name = "math-verify" },
-    { name = "matplotlib" },
-    { name = "megatron-bridge", extras = ["ssm", "te"], marker = "extra == 'mcore'", editable = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge" },
-    { name = "megatron-energon", extras = ["av-decode"], marker = "extra == 'mcore'", specifier = "~=7.3" },
-    { name = "mistral-common", marker = "extra == 'automodel'", specifier = ">=1.11.0" },
-    { name = "mlflow", specifier = ">=3.13.0" },
-    { name = "mooncake-transfer-engine-cuda13", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.13.post1" },
-    { name = "multi-storage-client", extras = ["boto3"], specifier = ">=0.50" },
-    { name = "nccl4py", marker = "sys_platform != 'darwin'" },
-    { name = "nemo-automodel", extras = ["moe"], marker = "extra == 'automodel'", editable = "3rdparty/Automodel-workspace/Automodel" },
-    { name = "nemo-gym", marker = "extra == 'nemo-gym'", editable = "3rdparty/Gym-workspace/Gym" },
-    { name = "nemo-lens", extras = ["aiohttp", "fastapi", "sdk"], git = "https://github.com/NVIDIA-NeMo/Lens.git?rev=4d045c03186b90afdc815db46b671f6a21bc7e98" },
-    { name = "ninja" },
-    { name = "nixl", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==1.3.0" },
-    { name = "num2words", specifier = ">=0.5.14" },
-    { name = "num2words", marker = "extra == 'vllm'", specifier = ">=0.5.14" },
-    { name = "numpy" },
-    { name = "nv-grouped-gemm", marker = "extra == 'automodel'", git = "https://github.com/fanshiqing/grouped_gemm?tag=v1.1.4.post7" },
-    { name = "nvidia-cudnn-cu13", marker = "sys_platform != 'darwin'", specifier = "==9.26.0.51" },
-    { name = "nvidia-cutlass-dsl", extras = ["cu13"], marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'mcore') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'mcore')", specifier = "==4.6.2" },
-    { name = "nvidia-cutlass-dsl", extras = ["cu13"], marker = "extra == 'vllm'", specifier = "==4.6.2" },
-    { name = "nvidia-cutlass-dsl-libs-base", marker = "extra == 'trtllm'", specifier = "==4.8.0.dev0" },
-    { name = "nvidia-cutlass-dsl-libs-core", marker = "extra == 'trtllm'", specifier = "==4.8.0.dev0" },
-    { name = "nvidia-cutlass-dsl-libs-cu12", marker = "extra == 'trtllm'", specifier = "==4.8.0.dev0" },
-    { name = "nvidia-cutlass-dsl-libs-cu13", marker = "extra == 'trtllm'", specifier = "==4.8.0.dev0" },
-    { name = "nvidia-ml-py" },
-    { name = "nvidia-modelopt", marker = "extra == 'modelopt'", git = "https://github.com/NVIDIA/Model-Optimizer?rev=43fd41a58d52c4e6e5dec1d1ff5989ecc737ae1a" },
-    { name = "nvidia-nvshmem-cu13", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = ">=3.6.5" },
-    { name = "nvidia-resiliency-ext", marker = "extra == 'nvrx'", git = "https://github.com/NVIDIA/nvidia-resiliency-ext.git?tag=v0.7.0" },
-    { name = "nvshmem4py-cu13", marker = "extra == 'mcore'", specifier = ">=0.2.1" },
-    { name = "nvtx" },
-    { name = "omegaconf" },
-    { name = "open-clip-torch", specifier = ">=3.2.0" },
-    { name = "pillow", specifier = ">=12.3.0" },
-    { name = "pip" },
-    { name = "plotly" },
-    { name = "pybase64" },
-    { name = "pyzmq" },
-    { name = "ray", extras = ["default"], specifier = ">=2.58.0" },
-    { name = "rich" },
-    { name = "sentencepiece" },
-    { name = "setuptools" },
-    { name = "sglang", marker = "extra == 'sglang'", git = "https://github.com/sgl-project/sglang.git?subdirectory=python&rev=3003d70f680d41c59d1b7acbf65cb47795dfd19e" },
-    { name = "sglang-kernel", marker = "extra == 'sglang'", specifier = "==0.4.5" },
-    { name = "sglang-router", marker = "extra == 'sglang'" },
-    { name = "soundfile", specifier = ">=0.13.1" },
-    { name = "swanlab" },
-    { name = "sympy", specifier = ">=1.14.0" },
-    { name = "tensorboard" },
-    { name = "tensordict" },
-    { name = "tensorrt-llm", marker = "extra == 'trtllm'", directory = "3rdparty/TensorRT-LLM-workspace" },
-    { name = "tiktoken" },
-    { name = "tilelang", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = ">=0.1.9,<0.1.13" },
-    { name = "tilelang", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'mcore') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'mcore')", specifier = "==0.1.9" },
-    { name = "tilelang", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'vllm') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm')", specifier = "==0.1.12" },
-    { name = "tilelang", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'automodel'", specifier = "==0.1.11" },
-    { name = "tilelang", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'sglang'", specifier = "==0.1.11" },
-    { name = "tilelang", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'trtllm'", specifier = "==0.1.9" },
-    { name = "timm" },
-    { name = "torch", marker = "sys_platform != 'darwin'", specifier = ">=2.11,<2.14", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform == 'darwin'", specifier = ">=2.11,<2.14", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'automodel'", specifier = "==2.13.0", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'mcore'", specifier = "==2.13.0", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'sglang'", specifier = "==2.11.0", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'trtllm'", specifier = "==2.13.0", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'vllm'", specifier = "==2.13.0", index = "https://pypi.org/simple" },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'automodel'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'mcore'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'sglang'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'trtllm'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'vllm'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch-memory-saver", marker = "extra == 'mcore'", specifier = ">=0.0.9.post1" },
-    { name = "torchdata" },
-    { name = "torchvision", marker = "sys_platform != 'darwin'", specifier = ">=0.26,<0.29", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torchvision", marker = "sys_platform == 'darwin'", specifier = ">=0.26,<0.29", index = "https://pypi.org/simple" },
-    { name = "torchvision", marker = "sys_platform == 'darwin' and extra == 'automodel'", specifier = "==0.28.0", index = "https://pypi.org/simple" },
-    { name = "torchvision", marker = "sys_platform == 'darwin' and extra == 'mcore'", specifier = "==0.28.0", index = "https://pypi.org/simple" },
-    { name = "torchvision", marker = "sys_platform == 'darwin' and extra == 'sglang'", specifier = "==0.26.0", index = "https://pypi.org/simple" },
-    { name = "torchvision", marker = "sys_platform == 'darwin' and extra == 'trtllm'", specifier = "==0.28.0", index = "https://pypi.org/simple" },
-    { name = "torchvision", marker = "sys_platform == 'darwin' and extra == 'vllm'", specifier = "==0.28.0", index = "https://pypi.org/simple" },
-    { name = "torchvision", marker = "sys_platform != 'darwin' and extra == 'automodel'", specifier = "==0.28.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torchvision", marker = "sys_platform != 'darwin' and extra == 'mcore'", specifier = "==0.28.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torchvision", marker = "sys_platform != 'darwin' and extra == 'sglang'", specifier = "==0.26.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torchvision", marker = "sys_platform != 'darwin' and extra == 'trtllm'", specifier = "==0.28.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torchvision", marker = "sys_platform != 'darwin' and extra == 'vllm'", specifier = "==0.28.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "transferqueue", git = "https://github.com/Ascend/TransferQueue.git?rev=05d4cc3377bee9b0f2897bbb90914ee20c0aea39" },
-    { name = "transformer-engine", extras = ["core-cu13", "pytorch"], marker = "extra == 'automodel'", git = "https://github.com/NVIDIA/TransformerEngine.git?rev=v2.14.1" },
-    { name = "transformers", specifier = ">=5.5.0,<=5.16.1" },
-    { name = "transformers", marker = "extra == 'automodel'", specifier = "==5.12.1" },
-    { name = "transformers", marker = "extra == 'mcore'", specifier = "==5.16.1" },
-    { name = "transformers", marker = "extra == 'sglang'", specifier = "==5.12.1" },
-    { name = "transformers", marker = "extra == 'trtllm'", specifier = "==5.5.4" },
-    { name = "transformers", marker = "extra == 'vllm'", specifier = "==5.12.1" },
-    { name = "triton", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "vllm", marker = "extra == 'vllm'", specifier = "==0.29.0" },
-    { name = "wandb", specifier = ">=0.30.0" },
-    { name = "zstandard" },
+[[package]]
+name = "nemo-sandboxed-gym"
+version = "0.1.0a1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
 ]
-provides-extras = ["automodel", "vllm", "sglang", "mcore", "trtllm", "modelopt", "nvrx", "nemo-gym"]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/60/b04322675f8647e755d47d875412924c2a1d7a22be78e2be76dbb1db9ad1/nemo_sandboxed_gym-0.1.0a1-py3-none-any.whl", hash = "sha256:ce25a8ba6a5282290b87094e4640743e31ac81811d5e97bddfa586385ecc1bea", size = 111589, upload-time = "2026-09-23T19:09:14.034Z" },
+]
 
-[package.metadata.requires-dev]
-build = [
-    { name = "einops" },
-    { name = "hatchling" },
-    { name = "packaging" },
-    { name = "psutil" },
-    { name = "pybind11" },
-    { name = "setuptools" },
-    { name = "torch", marker = "sys_platform != 'darwin'", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform == 'darwin'", index = "https://pypi.org/simple" },
+[package.optional-dependencies]
+opensandbox = [
+    { name = "opensandbox" },
 ]
-dev = [
-    { name = "pre-commit", specifier = ">=4.2.0" },
-    { name = "pyrefly", specifier = "==0.24.2" },
-    { name = "ruff", specifier = "==0.9.9" },
-    { name = "types-pyyaml" },
-    { name = "types-requests" },
+ray = [
+    { name = "ray" },
 ]
-docs = [
-    { name = "gitpython", specifier = ">=3.1.45" },
-    { name = "myst-parser" },
-    { name = "nvidia-sphinx-theme" },
-    { name = "python-dotenv" },
-    { name = "sphinx" },
-    { name = "sphinx-autobuild" },
-    { name = "sphinx-autodoc2" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-design" },
-    { name = "sphinx-reredirects" },
-    { name = "sphinxcontrib-mermaid" },
-    { name = "swagger-plugin-for-sphinx" },
-]
-test = [
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-shard" },
-    { name = "pytest-testmon" },
-    { name = "pytest-timeout" },
+server = [
+    { name = "fastapi", extra = ["standard"], marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
+    { name = "pyyaml" },
+    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
 ]
 
 [[package]]
@@ -4579,19 +4271,19 @@ wheels = [
 
 [[package]]
 name = "nixl"
-version = "1.3.0"
+version = "1.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "nixl-cu12" },
     { name = "nixl-cu13" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/a8/1e956af6efd181f44d0a94bfc9d883f1b19788467357018fbffe1fbe7a2d/nixl-1.3.0-py3-none-any.whl", hash = "sha256:000e2852040bce7863420c98f2c8ca675dc24066099c746fdbfe2bed3593ec9e", size = 10297, upload-time = "2026-06-15T23:22:51.093Z" },
+    { url = "https://files.pythonhosted.org/packages/07/25/670a0913285e12d3682520ecb10e50fb4fc01cbbb107e192a6666b6f5731/nixl-1.5.2-py3-none-any.whl", hash = "sha256:e4ef5e16f60be11622030e23333387bd73101102fc9f62efa1c99021d51550a6", size = 11806, upload-time = "2026-10-29T19:48:26.861Z" },
 ]
 
 [[package]]
 name = "nixl-cu12"
-version = "1.3.0"
+version = "1.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
@@ -4599,13 +4291,13 @@ dependencies = [
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or extra != 'extra-7-nemo-rl-sglang' or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/f8/9ac816a23a35da5c79ce1e1da80933a013112073a00f4da52eb576a3ee68/nixl_cu12-1.3.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:9a275d532ddb45ecdc5af00f7f47f8945a027d9a1c7a3184d688e151764da2dc", size = 49104015, upload-time = "2026-06-15T23:17:23.474Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/1a/2c11c42f71c0acf164c953291ec28297caeab02f571d9a97e7eca2034b3b/nixl_cu12-1.3.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:60eef38ee2b62957de8ba7d3178618b8bb099663bfd111cb19174b5010c7bd77", size = 50558141, upload-time = "2026-06-15T23:15:00.616Z" },
+    { url = "https://files.pythonhosted.org/packages/de/59/b2b4776d3e3b879b403d51bc312cba7f7bbda47ca3764675f646171fad73/nixl_cu12-1.5.2-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:deb477622a1e82326030d658563340c1e36102d6c6241f9689912ef540028aa4", size = 66932281, upload-time = "2026-10-29T19:47:12.454Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/d0/530d7357df5c4fa664bb417d83a08c4f0658e60f07b235bd866f822295a2/nixl_cu12-1.5.2-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:dd9301bc09038d543c14e8dc77f915d7c57294e4f722febc03ff56643611db2e", size = 68655754, upload-time = "2026-10-29T19:44:14.509Z" },
 ]
 
 [[package]]
 name = "nixl-cu13"
-version = "1.3.0"
+version = "1.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
@@ -4613,8 +4305,8 @@ dependencies = [
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or extra != 'extra-7-nemo-rl-sglang' or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm')" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/ff/9f462e977a40128c088bdc698ab855635caa5d7511fca245365ebf5d5e45/nixl_cu13-1.3.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:7c42f8546cfbe4595669212d4bbf596590f61494f0ae1a3bfbd3fb4fe4abf84f", size = 43678469, upload-time = "2026-06-15T23:21:58.728Z" },
-    { url = "https://files.pythonhosted.org/packages/67/96/d01c466193e88fcc4afeb2dc29ff35512b4af497db7a2e76e95f3f75b821/nixl_cu13-1.3.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:2363d3922402f7f3b7302254c3b44cc71520e5ad6a9dc43898fa59a6ee0620a3", size = 45134021, upload-time = "2026-06-15T23:19:50.763Z" },
+    { url = "https://files.pythonhosted.org/packages/00/d9/1ba9016611e3f9d773ed55fbf37fc6bb92c0d0dac6386f37e7228c76cdd1/nixl_cu13-1.5.2-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:ac83c16b59aa0027c0604ad636bd5b8a172512db09af73038be8fefdb3eca16c", size = 75548014, upload-time = "2026-10-29T19:46:56.288Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/be/e398acacfbd26dba4c720215942681746418b2999013f8a7116744f6a4b8/nixl_cu13-1.5.2-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:f1137c583df7f98997e411f386286c045b7e5c251c08198ce4f55e3f2b464fc5", size = 77375091, upload-time = "2026-10-29T19:43:42.902Z" },
 ]
 
 [[package]]
@@ -5410,6 +5102,18 @@ wheels = [
 ]
 
 [[package]]
+name = "obstore"
+version = "0.11.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/27/aa7549157a4a681157e315534ba5ab8f167f77662166e792a6e836938f46/obstore-0.11.1.tar.gz", hash = "sha256:a5afe8b99e3b20cdc9133be7a1b381259acf0d470029f6b2fc79c3f9947ad436", size = 130828, upload-time = "2026-08-21T23:57:27.837Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/36/b962ad52031b5bfdd249923db6151ff2b665b08c017611db96838455f337/obstore-0.11.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2a9f3d66dbf3c073dd6b6033c0787ef14edf78d97bff95595d6f6979692da264", size = 5556770, upload-time = "2026-08-21T23:56:38.377Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/04/41a0f2917fcaa1e66b754fc98c92441d5a252ff9c619941ac086f9bdb4f6/obstore-0.11.1-cp311-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:2ba3bceec4263b3a70eea873abedb82e03da9599f2326e80d6505cab0c10d401", size = 5337765, upload-time = "2026-08-21T23:56:40.279Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/39/0b618efe59ee4b58f16d2b9246674a70c390bebf665cd284b439bade9bd3/obstore-0.11.1-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:e956fa8a953b7eb8580658d68cdf37e410356032c17697a06e44d0e8c4084a0f", size = 5544012, upload-time = "2026-08-21T23:56:41.754Z" },
+    { url = "https://files.pythonhosted.org/packages/43/9c/656eb5cce818e7e3985d27f4bd403feb0b6e620494775a55a0943c8d2fff/obstore-0.11.1-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:67b8acfbbab960c2cb14c34294a96556caa67fcff15ee77c716d5c1bd1558606", size = 5790855, upload-time = "2026-08-21T23:56:46.391Z" },
+]
+
+[[package]]
 name = "omegaconf"
 version = "2.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5611,6 +5315,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/95/54/eb47866b94f2b5b42dde17644b78055ef1ee05aae59962c7290e55270803/opencv_python-5.0.0.93-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f8b6d0a212253dd26ad338c812f1f23ca118fdf05a9c8c6b9444f161aa8c5881", size = 71064711, upload-time = "2026-07-02T06:54:13.148Z" },
     { url = "https://files.pythonhosted.org/packages/93/da/962579f1e703cbf8c5422fd1f576467dcb3b5b0b0b81c1471c979764353a/opencv_python-5.0.0.93-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:08d5d91d967b58d6db86073b2ad3eaef88ca4ebdfd45c9059bf59f5ded0c7ad2", size = 49798576, upload-time = "2026-07-02T06:54:33.781Z" },
     { url = "https://files.pythonhosted.org/packages/cf/4c/c73f828fdbcd37eaf21d08fa852544a3ca7c2dbb3ea76873d64f2ea413d1/opencv_python-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c8de2dec111122a02e8beb28e16c31904992dfd6186560b142a92c71403c1039", size = 73783032, upload-time = "2026-07-02T06:55:03.415Z" },
+]
+
+[[package]]
+name = "opensandbox"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "httpcore" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "opentelemetry-api" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/2f/6682d18a69043b5ad29e8a411e969e2ee4216127dbc2257752690f502287/opensandbox-1.2.0.tar.gz", hash = "sha256:e7936d0bf3f7defa4e26571b0634089b4c3eb15d023909f6da9d940b95736c54", size = 329030, upload-time = "2026-10-27T12:36:39.214Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/18/2de1578aead2e5da094c352e2c1610d750c399070769feac02cb42ff8941/opensandbox-1.2.0-py3-none-any.whl", hash = "sha256:15a0f3c3245018afa43b75fb14e892a64c2c8807276a0fdaf2a1a469f5e214ea", size = 744130, upload-time = "2026-10-27T12:36:37.805Z" },
 ]
 
 [[package]]
@@ -6268,6 +5990,34 @@ wheels = [
 ]
 
 [[package]]
+name = "protobuf-py"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf-py-ext", marker = "platform_python_implementation == 'CPython' or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-mcore') or (extra == 'extra-7-nemo-rl-automodel' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-mcore' and extra == 'extra-7-nemo-rl-vllm')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/72/ed/02fd902d9c51b7ff53dfc9a745eb11490722edfd30073af889e171f07b8e/protobuf_py-0.1.1.tar.gz", hash = "sha256:6bd08ac4d8f1661965bbe2685429d79043704cdd1ee720a7a89617331742240b", size = 133525, upload-time = "2026-06-24T19:02:15.271Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/00/1b3775aca1c70e3007e06ef5996f6bb9b3a32341eb0cce3ffb6effad8dec/protobuf_py-0.1.1-py3-none-any.whl", hash = "sha256:efc4f50f275ed6dae10a1f30bb81ad1a75368557b3ff22a532b7a472050368f1", size = 181656, upload-time = "2026-06-24T19:01:29.556Z" },
+]
+
+[[package]]
+name = "protobuf-py-ext"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/05/6dc9ccff1e8159eb9a144e6d3c4acfd2211cd4fcd20c34fe9155d17d6a7f/protobuf_py_ext-0.1.1.tar.gz", hash = "sha256:e85bfdfdb3ed50634db8ccc7429dd9286520109489c735463971a418707b4fef", size = 31912, upload-time = "2026-06-24T19:02:16.321Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/d6/73c06bb4cac2e04c0adc154965fe8b6520224bd737fd7e73bba405056321/protobuf_py_ext-0.1.1-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:89ec8348d1ba045f79b2fedd14e40cca36f2a41b52f2c4fdf55a60c58add2353", size = 314769, upload-time = "2026-06-24T19:01:32.89Z" },
+    { url = "https://files.pythonhosted.org/packages/18/c5/e4e6bc6096b66d1c82639a1b501147f16ee65d32567304b987d002e2c666/protobuf_py_ext-0.1.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:182798e4861aba72d05855bd06febe4926aa7265e6f444a1b8af5252beee4f7e", size = 328122, upload-time = "2026-06-24T19:01:34.394Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/4b/1d792a40d0f0a0f914f1dfa8bb5e9573ca0ecd5fe5cecf80d77193212abd/protobuf_py_ext-0.1.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:9eb25c3a329c0551cc86b209a5e5d8ecb8d834b9924a3aa019377853a703b6d3", size = 492338, upload-time = "2026-06-24T19:01:36.103Z" },
+    { url = "https://files.pythonhosted.org/packages/52/51/5ad329223c905e5c530cae38ae24cde3584d8ab7e09457f2a01afce80e60/protobuf_py_ext-0.1.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:aaecbde82bef10c7c40578cbb61b7a19896bf7fa450972050a3bb302acb7d5d6", size = 541578, upload-time = "2026-06-24T19:01:37.481Z" },
+    { url = "https://files.pythonhosted.org/packages/52/43/e450b5e202f6715274acc9acd9f9769908cbdeab861a53c798fcbd467d35/protobuf_py_ext-0.1.1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9a9c2f026096ca4c595c89a297067ef371e241d3ff8e1f6d7c779aa8419cdca7", size = 316215, upload-time = "2026-06-24T19:01:51.249Z" },
+    { url = "https://files.pythonhosted.org/packages/97/5c/23e79b35f1b5755b9bdc0c0c9b8cd8abababaef1a1639608d8a96bb61a9d/protobuf_py_ext-0.1.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:cf78707a040b9294e5e1ec4a1875f0046acfe52e92150cea27de4e9fc9db39bb", size = 326419, upload-time = "2026-06-24T19:01:52.93Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/de/5493de0ec12920a3b1dd72608ce0c1e8cdb7e0eb9e87accaecc5216df29e/protobuf_py_ext-0.1.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:ae4373845cbb85bdade3ef5368cc2f4b5f80bf173383afc1ab063f95644e5599", size = 493734, upload-time = "2026-06-24T19:01:54.301Z" },
+    { url = "https://files.pythonhosted.org/packages/98/89/31da55b414e6332aad11d858e9a86bd36fbb324f52fa3fc6d8f1c57840a9/protobuf_py_ext-0.1.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:2a4cc478eef7a2acc1daaebcde479a3ac2396d47e6bdc7e776ca4c4147ba8b4c", size = 539703, upload-time = "2026-06-24T19:01:55.707Z" },
+]
+
+[[package]]
 name = "psutil"
 version = "7.2.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6612,6 +6362,29 @@ wheels = [
 ]
 
 [[package]]
+name = "pyqwest"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/2a/f8634142207082b1c559a499451db794c96130e586f1edb22dc1da4b05b2/pyqwest-0.12.0.tar.gz", hash = "sha256:83ff498bd53bee92a2d2bf14476679307a99c78421c02cae08ec113bed2fbd7d", size = 516105, upload-time = "2026-10-09T06:22:44.949Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/e5/407de30d15456583af485488dcb62c99fa24bcac6fd1521b57ef848aac27/pyqwest-0.12.0-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:dd55f27e4d526babb30c0d0e19c5517d7d6ecb59ab4219a30a5115fac1288698", size = 5751518, upload-time = "2026-10-09T06:21:21.296Z" },
+    { url = "https://files.pythonhosted.org/packages/29/9d/d7dcb2f3da4ea43c0e68894acea655063955d0c91401e74fb97f79c8265f/pyqwest-0.12.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:699662fca52a1595a1ed9c169816b7654c0b28308b9284091e96bbc79b8e408f", size = 5722887, upload-time = "2026-10-09T06:21:22.916Z" },
+    { url = "https://files.pythonhosted.org/packages/28/dd/dee75b5c39132c49e24313eeb79caa6c178a1975578f7226aac4bed2dbe1/pyqwest-0.12.0-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:1a8815ab7b61dc932379d42424e422a66df9634499095942e3b91bfd8f5e1dfd", size = 5904177, upload-time = "2026-10-09T06:21:24.768Z" },
+    { url = "https://files.pythonhosted.org/packages/24/2c/4a75b193f01a70375e6af2e080a12a64fd2057d342f4cd71090adaf6b949/pyqwest-0.12.0-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:0d4828c8dfbfee936c951cc467f0197891a752eb0d22d7469f1adb02152c400a", size = 6095821, upload-time = "2026-10-09T06:21:26.781Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/0d/42cb6e771aabb8745ccc7184bd132e4471a8659cdd7bee65f05dc94f0a78/pyqwest-0.12.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:6319e35a3f867a1a57071cfe63364b9f35b38d4ae3a6231fcab5d3a82e9d5705", size = 5751522, upload-time = "2026-10-09T06:21:35.123Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/a7/d09ef94ee9811ca7a698f2947a25618a60226c13f3e9193a2bc1880c4178/pyqwest-0.12.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:ba001c5f06a92426635d86c2ccb8a4c732f2bb1424361c68161f8726b5141520", size = 5714017, upload-time = "2026-10-09T06:21:36.672Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/b8/0770a8eaa97e845cbdf1e5fd9af36235580aae18f63d7e6ed0f257ffde01/pyqwest-0.12.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:39a7e94b109bc10b05a6151308bac6ead404a900768861216467544337a971d6", size = 5903886, upload-time = "2026-10-09T06:21:38.202Z" },
+    { url = "https://files.pythonhosted.org/packages/df/f6/ad021859fb8380541604822ec6252c6e721f504b108e805b533ae8083a1f/pyqwest-0.12.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:b8527b9795d7e72efaf0f2fcba6b293f85e1720201e44f94889ca33d263079e9", size = 6091049, upload-time = "2026-10-09T06:21:40.333Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/11/3bdeb82f4425ed42d5ee877003974de7a716990f8681c6a637046a3d49eb/pyqwest-0.12.0-cp315-abi3.abi3t-manylinux_2_28_aarch64.whl", hash = "sha256:90fee9cd448324fbdc4ed2dff787749f19ac17315aa9e18d88ced0b843fc8dac", size = 5791319, upload-time = "2026-10-09T06:22:04.628Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/b5/024555a08ab26bdadbe63b7acb6115a5d0e536efa94c4c71c4bbce445a45/pyqwest-0.12.0-cp315-abi3.abi3t-manylinux_2_28_x86_64.whl", hash = "sha256:ae7b73b47e3fb2462a5292417d49e7780ce2dc9857e8bce7276ea2f090a90768", size = 5764278, upload-time = "2026-10-09T06:22:06.309Z" },
+    { url = "https://files.pythonhosted.org/packages/61/44/57bba169ee17c02dfd0b2a6508ed4c027e0d14ee3765fa3c641399521e2d/pyqwest-0.12.0-cp315-abi3.abi3t-musllinux_1_2_aarch64.whl", hash = "sha256:5f83e15b7bebc761e7b6a0f1cbac334d058e698fb49ba1328306660b00c3c92d", size = 5939856, upload-time = "2026-10-09T06:22:07.915Z" },
+    { url = "https://files.pythonhosted.org/packages/69/66/926b90a270e9893958840fa610531b5a0d47604e088e1c60305c13890938/pyqwest-0.12.0-cp315-abi3.abi3t-musllinux_1_2_x86_64.whl", hash = "sha256:8057eddcae424eadbf15c9ab67f4aebdc2ce5f2cf1d8d4f6c34ca9d9ab62fef5", size = 6139873, upload-time = "2026-10-09T06:22:09.498Z" },
+]
+
+[[package]]
 name = "pyrefly"
 version = "0.24.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6767,6 +6540,18 @@ wheels = [
 ]
 
 [[package]]
+name = "python-engineio"
+version = "4.15.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "simple-websocket" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dd/91/b565807fa922620ed575b412bf978d032e4c5d79558b400fdbfe1008c95a/python_engineio-4.15.1.tar.gz", hash = "sha256:1a412e798a90c64fabe7b20798939ae6d4a03f34da8a33d5a21a25a8bbbc3612", size = 93104, upload-time = "2026-10-28T23:53:30.846Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/5c/552f1dce2443dc33ce6b2ee7f67599ba5c83ef5582e2235a9878ac239049/python_engineio-4.15.1-py3-none-any.whl", hash = "sha256:745cb3c07701c719a2906439a00b67e44ef042904036568530a2c3a8cf18c89a", size = 60775, upload-time = "2026-10-28T23:53:29.304Z" },
+]
+
+[[package]]
 name = "python-json-logger"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6782,6 +6567,28 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
+]
+
+[[package]]
+name = "python-socketio"
+version = "5.18.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "bidict" },
+    { name = "python-engineio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/b9/4ab083267c1f8ece9a9e019808412af7c7a03321411a1263cd863321baa2/python_socketio-5.18.1.tar.gz", hash = "sha256:07ab0e7c94a52833a67af1dc05958ad6fb0de69adc87de9198a61b22588c40d4", size = 132106, upload-time = "2026-11-03T12:19:20.723Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/e2/cdc630aef7da00698af4ed061ff873297f806cc049cc5c67bf89077cb7e4/python_socketio-5.18.1-py3-none-any.whl", hash = "sha256:e768c473842be811f6dd24bd0a49cd0d4a0c994182e3eba23cc9d1489c7a697e", size = 83022, upload-time = "2026-11-03T12:19:19.136Z" },
+]
+
+[package.optional-dependencies]
+asyncio-client = [
+    { name = "aiohttp" },
+]
+client = [
+    { name = "requests" },
+    { name = "websocket-client" },
 ]
 
 [[package]]
@@ -7431,6 +7238,18 @@ wheels = [
 ]
 
 [[package]]
+name = "simple-websocket"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wsproto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b0/d4/bfa032f961103eba93de583b161f0e6a5b63cebb8f2c7d0c6e6efe1e3d2e/simple_websocket-1.1.0.tar.gz", hash = "sha256:7939234e7aa067c534abdab3a9ed933ec9ce4691b0713c78acb195560aa52ae4", size = 17300, upload-time = "2024-10-10T22:39:31.412Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/59/0782e51887ac6b07ffd1570e0364cf901ebc36345fea669969d2084baebb/simple_websocket-1.1.0-py3-none-any.whl", hash = "sha256:4af6069630a38ed6c561010f0e11a5bc0d4ca569b36306eb257cd9a192497c8c", size = 13842, upload-time = "2024-10-10T22:39:29.645Z" },
+]
+
+[[package]]
 name = "simplejson"
 version = "4.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -7937,14 +7756,13 @@ test = [
     { name = "pytest-timeout" },
 ]
 
-[package.metadata]
-requires-dist = [{ name = "nemo-rl", editable = "." }]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "pytest", specifier = ">=7.0.0" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
+[[package]]
+name = "tenacity"
+version = "9.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/9e/497c1c8ebe5a5b5d1d4a7511aea22c0bb1a97e3170d98abdef0e1b34265a/tenacity-9.2.1.tar.gz", hash = "sha256:a606b5c808d0cded4a359d5b9932d867ff2a6a6b64d37350260fd01bbdf83839", size = 58261, upload-time = "2026-10-07T12:13:01.633Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/26/1ff2b0721ac66a3ec5b1402b333110b352ab0a8724052ac279a7b82d40c4/tenacity-9.2.1-py3-none-any.whl", hash = "sha256:9e56f17539296baab7beabb08b92f6ee3d7be92d8be72d763360677c2ad6580e", size = 32310, upload-time = "2026-10-07T12:13:00.102Z" },
 ]
 
 [[package]]
@@ -8079,90 +7897,6 @@ dependencies = [
     { name = "uvloop" },
     { name = "xdsl" },
     { name = "xgrammar" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", specifier = ">=1.7.0" },
-    { name = "aenum" },
-    { name = "apache-tvm-ffi", specifier = "==0.1.13.post2" },
-    { name = "backoff" },
-    { name = "blake3" },
-    { name = "blobfile" },
-    { name = "cache-dit", specifier = ">=1.3.5" },
-    { name = "click", specifier = ">=8.4.2" },
-    { name = "click-option-group", specifier = ">=0.5.3" },
-    { name = "colored" },
-    { name = "cuda-python", specifier = ">=13" },
-    { name = "cuda-tile", specifier = ">=1.0.1" },
-    { name = "diffusers", specifier = ">=0.40.0,<0.41" },
-    { name = "einops" },
-    { name = "etcd-sdk-python", specifier = "==0.0.7" },
-    { name = "fastapi", specifier = ">=0.136.3" },
-    { name = "flash-attn-4", specifier = "==4.0.0b19" },
-    { name = "flashinfer-python", specifier = "==0.6.18" },
-    { name = "ftfy" },
-    { name = "h5py", specifier = "==3.12.1" },
-    { name = "jinja2" },
-    { name = "jsonschema" },
-    { name = "lark" },
-    { name = "lazy-loader", specifier = "~=0.5" },
-    { name = "librosa" },
-    { name = "llguidance", specifier = "==0.7.29" },
-    { name = "llist" },
-    { name = "matplotlib" },
-    { name = "mistral-common", specifier = ">=1.10.0" },
-    { name = "mpi4py" },
-    { name = "mpmath", specifier = ">=1.3.0" },
-    { name = "msgpack" },
-    { name = "msgspec" },
-    { name = "nccl4py", specifier = ">=0.3.1,<0.4" },
-    { name = "numexpr" },
-    { name = "numpy", specifier = ">=2.0.0,<2.4" },
-    { name = "nvidia-cuda-nvrtc" },
-    { name = "nvidia-cuda-tileiras", specifier = ">=13.1,<13.2" },
-    { name = "nvidia-cudnn-frontend", specifier = ">=1.27.0,<1.28" },
-    { name = "nvidia-cutlass-dsl", extras = ["cu13"], specifier = "==4.8.0.dev0" },
-    { name = "nvidia-matmul-heuristics", specifier = "==0.1.0.27" },
-    { name = "nvidia-ml-py", specifier = ">=13" },
-    { name = "nvidia-nccl-cu13", specifier = ">=2.29.7,<=2.30.7" },
-    { name = "nvtx" },
-    { name = "omegaconf" },
-    { name = "openai" },
-    { name = "openai-harmony", specifier = "==0.0.4" },
-    { name = "optimum" },
-    { name = "ordered-set" },
-    { name = "packaging", specifier = ">=24.2" },
-    { name = "pandas" },
-    { name = "partial-json-parser" },
-    { name = "peft", specifier = ">=0.18.1,<0.19.0" },
-    { name = "pillow" },
-    { name = "plotly" },
-    { name = "prometheus-client" },
-    { name = "prometheus-fastapi-instrumentator", specifier = ">=8.1.0" },
-    { name = "protobuf", specifier = ">=5.27.2" },
-    { name = "psutil" },
-    { name = "pulp" },
-    { name = "pydantic", specifier = ">=2.9.1" },
-    { name = "pydantic-settings", extras = ["yaml"] },
-    { name = "python-multipart" },
-    { name = "pyzmq" },
-    { name = "quack-kernels", specifier = "==0.5.0" },
-    { name = "safetensors", specifier = ">=0.8.0" },
-    { name = "sentencepiece", specifier = ">=0.1.99" },
-    { name = "soundfile" },
-    { name = "starlette", specifier = ">=1.3.1" },
-    { name = "strenum" },
-    { name = "tiktoken" },
-    { name = "torch", specifier = ">=2.13.0,<=2.14.0a0" },
-    { name = "torch-c-dlpack-ext", specifier = "==0.1.3" },
-    { name = "torchao", specifier = ">=0.14.1,<0.16.0" },
-    { name = "torchvision" },
-    { name = "transformers", specifier = "==5.5.4" },
-    { name = "uvicorn" },
-    { name = "uvloop", specifier = ">=0.19.0" },
-    { name = "xdsl", specifier = ">=0.59.0" },
-    { name = "xgrammar", specifier = "==0.1.32" },
 ]
 
 [[package]]
@@ -8403,6 +8137,15 @@ source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/e8/cfa84bf6bb5f4c6a6d48b3d68efd4070c725fdc723bf129e64fa1d83d77a/tokenspeed_triton-3.8.10.post20260920-cp312-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:299f5881de06a3448d8e4f4bfecdf6ff9f1489693baf16303de8416ba82c16d6", size = 94199305, upload-time = "2026-09-20T05:31:23.108Z" },
     { url = "https://files.pythonhosted.org/packages/f5/18/b7dce94f3f697a1e519bf66899bf75aecf565b8eb7902c8df7fb5bc98196/tokenspeed_triton-3.8.10.post20260920-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:eb5eae6c4d3db11e13b7058c89b57e075fa7df905d43169cfdb066e161886421", size = 99900581, upload-time = "2026-09-20T05:31:30.779Z" },
+]
+
+[[package]]
+name = "toml"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
 ]
 
 [[package]]
@@ -9142,6 +8885,15 @@ wheels = [
 ]
 
 [[package]]
+name = "websocket-client"
+version = "1.9.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/cb/a5abcc2891249f393827c650c6296660ce40374ac22d99ab9aea41f9d2a2/websocket_client-1.9.2.tar.gz", hash = "sha256:0fcb57545848be86992e128218fd96dd87a6769ffdb1a968dff79632b85604d0", size = 84110, upload-time = "2026-08-31T14:08:40.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/d2/cc4dc1271e464942db7ee278baae2daa99ee77cb2af744025c04da585a3e/websocket_client-1.9.2-py3-none-any.whl", hash = "sha256:e1a673830a9c7bfa47b1cd3d5e4178f4c9651d80a4eab02c9c23a1c3ec6250ce", size = 95786, upload-time = "2026-08-31T14:08:39.899Z" },
+]
+
+[[package]]
 name = "websockets"
 version = "17.1"
 source = { registry = "https://pypi.org/simple" }
@@ -9202,7 +8954,7 @@ name = "wsproto"
 version = "1.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
+    { name = "h11", marker = "extra == 'extra-7-nemo-rl-automodel' or extra == 'extra-7-nemo-rl-mcore' or extra == 'extra-7-nemo-rl-nemo-gym' or (extra == 'extra-7-nemo-rl-modelopt' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-nvrx' and extra != 'extra-7-nemo-rl-sglang') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-trtllm') or (extra == 'extra-7-nemo-rl-sglang' and extra == 'extra-7-nemo-rl-vllm') or (extra == 'extra-7-nemo-rl-trtllm' and extra == 'extra-7-nemo-rl-vllm') or (extra != 'extra-7-nemo-rl-sglang' and extra != 'extra-7-nemo-rl-trtllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c7/79/12135bdf8b9c9367b8701c2c19a14c913c120b882d50b014ca0d38083c2c/wsproto-1.3.2.tar.gz", hash = "sha256:b86885dcf294e15204919950f666e06ffc6c7c114ca900b060d6e16293528294", size = 50116, upload-time = "2025-11-20T18:18:01.871Z" }
 wheels = [

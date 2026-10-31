@@ -114,6 +114,7 @@ def build_checkpoint_config(
     for field in (
         "single_rank_consolidation",
         "consolidation_timeout_minutes",
+        "v4_compatible",
     ):
         if field in raw_checkpoint_config:
             checkpoint_config[field] = raw_checkpoint_config[field]

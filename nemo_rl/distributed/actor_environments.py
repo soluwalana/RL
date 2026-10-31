@@ -110,6 +110,12 @@ ACTOR_ENVIRONMENTS: dict[str, list[str] | None] = {
     "nemo_rl.data_plane.mooncake_storage_unit.MooncakeStorageUnit": None,
     "nemo_rl.environments.tools.retriever.RAGEnvironment": None,
     NEMO_GYM_ACTOR_FQN: ["nemo_gym"],
+    # SandboxedGymActor drives the sandbox through nemo-sandboxed-gym and reuses
+    # Gym postprocessing helpers. The NeMo-Gym environment carries both, plus the
+    # OpenSandbox SDK from nemo_gym[sandbox]. The episode broker has no entry of
+    # its own: nemo-sandboxed-gym cannot read this registry, so the broker inherits
+    # this environment from the actor that creates it.
+    "nemo_rl.environments.sandbox.nemo_gym_actor.SandboxedGymActor": ["nemo_gym"],
     # ModelOpt quantization-aware workers
     "nemo_rl.modelopt.models.generation.vllm_quant_worker.VllmQuantGenerationWorker": [
         "modelopt",

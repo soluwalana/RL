@@ -4701,13 +4701,11 @@ def _grpo_train_impl(
                         checkpointer.begin_finalization(
                             checkpoint_path,
                             wait_fn=policy.finalize_async_save,
-                        )
-
-                        # Record last-successful-checkpoint time/step for external
-                        # monitoring (parity with async_grpo_train; see
-                        # _write_latest_checkpoint_status).
-                        _write_latest_checkpoint_status(
-                            checkpointer, last_checkpoint_step=total_steps + 1
+                            on_success=lambda saved_step=total_steps + 1: (
+                                _write_latest_checkpoint_status(
+                                    checkpointer, last_checkpoint_step=saved_step
+                                )
+                            ),
                         )
 
             # Logging
@@ -4938,7 +4936,9 @@ def grpo_train(
             processor=processor,
         )
     finally:
-        shutdown_environments(task_to_env, val_task_to_env)
+        # OpenSandbox destroy_host needs longer than the default. A short
+        # timeout falls through to ray.kill and leaves BatchSandbox CRs behind.
+        shutdown_environments(task_to_env, val_task_to_env, timeout=300)
 
 
 def validate(
@@ -6667,12 +6667,11 @@ def async_grpo_train(
                         checkpointer.begin_finalization(
                             checkpoint_path,
                             wait_fn=policy.finalize_async_save,
-                        )
-
-                        # Record last-successful-checkpoint time/step for external
-                        # monitoring (see _write_latest_checkpoint_status).
-                        _write_latest_checkpoint_status(
-                            checkpointer, last_checkpoint_step=step + 1
+                            on_success=lambda saved_step=step + 1: (
+                                _write_latest_checkpoint_status(
+                                    checkpointer, last_checkpoint_step=saved_step
+                                )
+                            ),
                         )
 
                     # On save-bound steps, engine stayed asleep after training;
@@ -6885,7 +6884,9 @@ def async_grpo_train(
             print(f"Error stopping replay buffer: {e}")
 
         # Environments can have in-flight HTTP requests to generation workers.
-        shutdown_environments(task_to_env, val_task_to_env)
+        # OpenSandbox destroy_host needs longer than the default. A short
+        # timeout falls through to ray.kill and leaves BatchSandbox CRs behind.
+        shutdown_environments(task_to_env, val_task_to_env, timeout=300)
 
         print("🛑 Shutting down generation workers...")
         try:

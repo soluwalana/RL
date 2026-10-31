@@ -2477,6 +2477,7 @@ def _prepare_nemo_gym_rows(
         row[NEMO_GYM_GROUP_ID_KEY] = group_ids[group_index]
         row[NEMO_GYM_GROUP_ATTEMPT_KEY] = group_attempts[group_index]
         row[NEMO_GYM_ROLLOUT_INDEX_KEY] = rollout_index
+        row.setdefault(NEMO_GYM_TASK_INDEX_KEY, group_index)
 
 
 def _bucket_nemo_gym_rows_by_instance(
@@ -3339,6 +3340,8 @@ def _postprocess_single_nemo_gym_group(
         max_gen_tokens_per_turn_values = [
             m["max_gen_tokens_per_turn"] for m in all_sample_metrics
         ]
+        total_reward_values = [m["total_reward"] for m in all_sample_metrics]
+
         rollout_metrics = {
             **group_metrics,
             **calculate_single_metric(
@@ -3365,10 +3368,16 @@ def _postprocess_single_nemo_gym_group(
             ),
             "max_gen_tokens_per_turn/p95": pct(max_gen_tokens_per_turn_values, 95),
             **calculate_single_metric(
-                [m["total_reward"] for m in all_sample_metrics],
+                total_reward_values,
                 batch_size,
                 "total_reward",
             ),
+            # Quartiles alongside the stddev calculate_single_metric already gives.
+            # Rewards are frequently bimodal (0/1 verifiers), where mean +/- stddev
+            # can extend past either end of the range and describes no rollout that
+            # happened; p25-p75 is where the middle half actually landed.
+            "total_reward/p25": pct(total_reward_values, 25),
+            "total_reward/p75": pct(total_reward_values, 75),
             "natural_termination_rate": sum(
                 not m["hit_max_tokens"] for m in all_sample_metrics
             )
@@ -3526,15 +3535,24 @@ def _postprocess_single_nemo_gym_group(
 
     group_task_index = None
     if nemo_gym_rows and NEMO_GYM_TASK_INDEX_KEY in nemo_gym_rows[0]:
-        group_task_index = int(nemo_gym_rows[0][NEMO_GYM_TASK_INDEX_KEY])
-        task_indices = [row.get(NEMO_GYM_TASK_INDEX_KEY) for row in nemo_gym_rows]
-        if any(
-            task_index is None or int(task_index) != group_task_index
-            for task_index in task_indices
-        ):
-            raise ValueError(
-                f"Expected one _ng_task_index per prompt group, got {task_indices}"
-            )
+        # The synchronous path hands in the whole batch, so check each prompt group in it.
+        size = group_size or len(nemo_gym_rows)
+        group_task_indices: list[int] = []
+        for start in range(0, len(nemo_gym_rows), size):
+            chunk = nemo_gym_rows[start : start + size]
+            task_indices = [row.get(NEMO_GYM_TASK_INDEX_KEY) for row in chunk]
+            first = task_indices[0]
+            if first is None or any(
+                task_index is None or int(task_index) != int(first)
+                for task_index in task_indices
+            ):
+                raise ValueError(
+                    f"Expected one _ng_task_index per prompt group, got {task_indices}"
+                )
+            group_task_indices.append(int(first))
+        # A batch of several prompt groups has no single task index to report.
+        if len(group_task_indices) == 1:
+            group_task_index = group_task_indices[0]
 
     return NemoGymRolloutResult(
         input_ids=input_ids,

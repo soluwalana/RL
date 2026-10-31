@@ -55,6 +55,7 @@ from nemo_rl.experience.interfaces import (
     NEMO_GYM_GROUP_ATTEMPT_KEY,
     NEMO_GYM_GROUP_ID_KEY,
     NEMO_GYM_ROLLOUT_INDEX_KEY,
+    NEMO_GYM_TASK_INDEX_KEY,
 )
 from nemo_rl.experience.metric_utils import calculate_single_metric, pct
 from nemo_rl.experience.rollout_manager import (
@@ -195,18 +196,34 @@ def test_attach_image_model_inputs_keeps_rollout_tokens_and_packs_media():
             assert token == "<image>"
             return 8
 
-    class _Processor:
+    class ChatTemplateVisionProcessor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
         model_input_names = ["input_ids", "pixel_values"]
 
-        def __call__(self, *, text, images, return_tensors):
-            assert text == "<image>" * len(images)
+        def apply_chat_template(
+            self,
+            messages,
+            *,
+            tokenize,
+            add_generation_prompt,
+            return_tensors,
+            return_dict,
+        ):
+            assert tokenize is True
+            assert add_generation_prompt is True
             assert return_tensors == "pt"
+            assert return_dict is True
+            images = [
+                part["image"]
+                for part in messages[0]["content"]
+                if part["type"] == "image"
+            ]
             red_values = [image.getpixel((0, 0))[0] for image in images]
+            # One image-token id, matching the single placeholder in the rollout.
             return {
-                "input_ids": torch.tensor([[101, 102]]),
+                "input_ids": torch.tensor([[101, 8]]),
                 "pixel_values": torch.tensor(red_values, dtype=torch.float32).view(
                     -1, 1
                 ),
@@ -216,7 +233,9 @@ def test_attach_image_model_inputs_keeps_rollout_tokens_and_packs_media():
     message = {"role": "user", "content": "", "token_ids": rollout_tokens}
     images = [Image.new("RGB", (2, 3), color="red")]
 
-    attach_image_model_inputs_to_message(message, images=images, processor=_Processor())
+    attach_image_model_inputs_to_message(
+        message, images=images, processor=ChatTemplateVisionProcessor()
+    )
 
     packed = message["pixel_values"]
     assert isinstance(packed, PackedTensor)
@@ -3053,7 +3072,20 @@ def test_prepare_nemo_gym_rows_stamps_distinct_legacy_prompt_groups():
     assert rows[0][NEMO_GYM_GROUP_ID_KEY] != rows[2][NEMO_GYM_GROUP_ID_KEY]
     assert [row[NEMO_GYM_GROUP_ATTEMPT_KEY] for row in rows] == [0, 0, 0, 0]
     assert [row[NEMO_GYM_ROLLOUT_INDEX_KEY] for row in rows] == [0, 1, 0, 1]
+    assert [row[NEMO_GYM_TASK_INDEX_KEY] for row in rows] == [0, 0, 1, 1]
     assert [row["_rowidx"] for row in rows] == [0, 1, 2, 3]
+
+    prestamped = [
+        {"responses_create_params": {}, NEMO_GYM_TASK_INDEX_KEY: 40},
+        {"responses_create_params": {}, NEMO_GYM_TASK_INDEX_KEY: 40},
+    ]
+    rollouts_mod._prepare_nemo_gym_rows(
+        prestamped,
+        generation_config={"max_new_tokens": 64},
+        sampling_params=SimpleNamespace(temperature=0.7, top_p=0.9),
+        num_generations=2,
+    )
+    assert [row[NEMO_GYM_TASK_INDEX_KEY] for row in prestamped] == [40, 40]
 
 
 def test_prepare_nemo_gym_rows_updates_mixed_materialized_and_flat_inputs():

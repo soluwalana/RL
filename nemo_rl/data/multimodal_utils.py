@@ -1718,26 +1718,19 @@ def _image_num_tokens_from_processed(processed: dict[str, Any]) -> list[int]:
     return [int(item) for item in value]
 
 
-def attach_image_model_inputs_to_message(
-    message: dict[str, Any],
-    *,
-    images: list[Image.Image],
+def _process_placeholder_images(
     processor: Any,
-    pad_dynamic_image_shapes: bool = False,
-    expected_num_tokens_per_image: Sequence[int] | None = None,
-) -> None:
-    """Attach image tensors while preserving rollout-token/media parity."""
-    if not images or processor is None:
-        return
-    if expected_num_tokens_per_image is not None and len(
-        expected_num_tokens_per_image
-    ) != len(images):
-        raise ValueError(
-            f"Got {len(images)} images but {len(expected_num_tokens_per_image)} "
-            "rollout placeholder runs for this turn. Refusing to train on "
-            "misaligned media."
-        )
+    images: list[Image.Image],
+    *,
+    pad_dynamic_image_shapes: bool,
+    expected_num_tokens_per_image: Sequence[int] | None,
+) -> dict[str, Any]:
+    """Run a Nemotron placeholder processor and return its model inputs.
 
+    These processors expand ``<image>`` inside ``__call__`` and report
+    ``num_tokens`` plus ``imgs_sizes``. Every other processor takes the
+    chat-template path instead.
+    """
     image_token = getattr(processor, "image_token", "<image>")
     # Processors that emit dynamic per-image resolutions return a ragged CHW list
     # for heterogeneous multi-image turns. Asking BatchFeature for PT tensors
@@ -1763,6 +1756,93 @@ def attach_image_model_inputs_to_message(
             allow_ragged_output = len(images) > 1
     if allow_ragged_output:
         processed = _materialize_ragged_pixel_values(processed, processor)
+    return processed
+
+
+def _image_placeholder_token_id(processor: Any) -> int | None:
+    """The id of ``processor.image_token``, or None when it cannot be resolved."""
+    image_token = getattr(processor, "image_token", None)
+    tokenizer = getattr(processor, "tokenizer", None)
+    convert_token = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if not isinstance(image_token, str) or not callable(convert_token):
+        return None
+    media_token_id = convert_token(image_token)
+    if isinstance(media_token_id, bool) or not isinstance(media_token_id, int):
+        return None
+    if media_token_id == getattr(tokenizer, "unk_token_id", None):
+        return None
+    return media_token_id
+
+
+def _require_chat_template_image_token_parity(
+    message: dict[str, Any], processor: Any, processed: dict[str, Any]
+) -> None:
+    """Refuse a chat-template result whose image-token count disagrees with the rollout."""
+    token_id = _image_placeholder_token_id(processor)
+    rollout_ids = message.get("token_ids")
+    template_ids = processed.get("input_ids")
+    if (
+        token_id is None
+        or not isinstance(rollout_ids, torch.Tensor)
+        or not isinstance(template_ids, torch.Tensor)
+    ):
+        return
+    rollout_count = int(rollout_ids.eq(token_id).sum().item())
+    template_count = int(template_ids.eq(token_id).sum().item())
+    if rollout_count != template_count:
+        raise ValueError(
+            f"Chat-template processor emitted {template_count} image tokens "
+            f"but the rollout tokens contain {rollout_count}. Refusing to "
+            "train on misaligned media."
+        )
+
+
+def attach_image_model_inputs_to_message(
+    message: dict[str, Any],
+    *,
+    images: list[Image.Image],
+    processor: Any,
+    pad_dynamic_image_shapes: bool = False,
+    expected_num_tokens_per_image: Sequence[int] | None = None,
+) -> None:
+    """Attach image tensors while preserving rollout-token/media parity."""
+    if not images or processor is None:
+        return
+    if expected_num_tokens_per_image is not None and len(
+        expected_num_tokens_per_image
+    ) != len(images):
+        raise ValueError(
+            f"Got {len(images)} images but {len(expected_num_tokens_per_image)} "
+            "rollout placeholder runs for this turn. Refusing to train on "
+            "misaligned media."
+        )
+
+    if uses_image_placeholder(processor):
+        processed = _process_placeholder_images(
+            processor,
+            images,
+            pad_dynamic_image_shapes=pad_dynamic_image_shapes,
+            expected_num_tokens_per_image=expected_num_tokens_per_image,
+        )
+    else:
+        # Qwen, Gemma, and every other processor expand images from the message
+        # content. The PIL images were already decoded; they are not re-encoded.
+        processed = processor.apply_chat_template(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image} for image in images
+                    ],
+                }
+            ],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+        )
+        processed = dict(processed)
+        _require_chat_template_image_token_parity(message, processor, processed)
     model_inputs = extract_multimodal_model_inputs(processor, processed)
     message.update(
         {

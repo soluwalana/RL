@@ -71,7 +71,7 @@ dependencies = [
   "nccl4py; sys_platform != 'darwin'",                                                                                       # for non-colocated refit
   "cuda-bindings; sys_platform != 'darwin'",                                                                                 # for non-colocated refit
   # Worker venvs run a base sync before backend extras, so NIXL must be available here.
-  "nixl==1.3.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+  "nixl==1.5.2; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "pybase64",                                                                                                 # for sglang refit
   "awscrt>=0.35.0",                                                                                           # for parallel S3 refit transport
   "multi-storage-client[boto3]>=0.50",                                                                        # for msc:// (S3) checkpoint storage; the driver's CheckpointManager runs in the base venv
@@ -142,7 +142,9 @@ automodel = [
   # Colocated with vLLM engines (CUDA-IPC refit); must share vLLM's torch ABI.
   "torch==2.13.0",
   "torchvision==0.28.0",
-  "nemo-automodel[moe]",
+  # moe is the expert stack. vlm is the vision-language imports (backoff, numba,
+  # timm, open-clip, ...) without vlm-media or diffusion-media, which pull FFmpeg.
+  "nemo-automodel[moe,vlm]",
   # Automodel's FLA kernels require this TileLang version on Hopper.
   # Keep this scoped to the automodel fork; sglang intentionally pins TileLang 0.1.8.
   "tilelang==0.1.11; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -275,7 +277,11 @@ modelopt = ["nvidia-modelopt"]
 nvrx = [
   "nvidia-resiliency-ext==0.7.0",
 ] # for ft_launcher (fault-tolerant training launcher)
-nemo_gym = ["nemo_gym"]
+# The [sandbox] extra carries the OpenSandbox SDK and tenacity. The episode broker actor runs in
+# this environment and is the only OpenSandbox client for episode sandboxes.
+# nemo-sandboxed-gym owns the broker, the wire contract, and the job-host orchestration that
+# used to live under nemo_rl/environments/sandbox/; [ray] adds the broker actor wrapper.
+nemo_gym = ["nemo_gym[sandbox]", "nemo-sandboxed-gym[server,opensandbox,ray]==0.1.0a1"]
 
 [dependency-groups]
 
@@ -471,6 +477,13 @@ override-dependencies = [
   "llguidance>=1.7.0,<1.8.0",
   # Override setuptools range in other dependencies to address CVE GHSA-58pv-8j8x-9vj2
   "setuptools>=80.10.2",
+  # Override mlflow's cryptography ceiling to address CVE GHSA-g6cj-pr64-35w5 (CVE-2026-69247,
+  # a Bleichenbacher oracle in PKCS#7 EnvelopedData decryption, fixed in 50.0.0). mlflow 3.14.0
+  # requires cryptography<49 and no release through 3.15.1 allows >=50, so this cannot be a
+  # constraint. Safe to force: mlflow-skinny does not depend on cryptography at all, mlflow's cap
+  # is a routine next-major bound, and 50.0.0's only behaviour changes on linux-x86_64 are
+  # stricter DER parsing plus the FFDH deprecation - nothing mlflow exercises.
+  "cryptography>=50.0.0",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@17cfb817bccec3a9c247013360cc550c2bac441e",
   # Relax megatron-core workspace member's opentelemetry-api ceiling (<1.34) for protobuf 6.x compat with ray
   "opentelemetry-api>=1.33.1",
@@ -541,7 +554,7 @@ constraint-dependencies = [
   "brotli>=1.2.0",            # Address CVE GHSA-2qfp-q593-8484
   "starlette>=0.49.1",        # Address CVE GHSA-7f5h-v6xp-fcq8
   "urllib3>=2.7.0",           # Address CVE GHSA-38jv-5279-wg99
-  "aiohttp>=3.13.3",          # Address CVE GHSA-mqqc-3gqh-h2x8
+  "aiohttp>=3.14.3",          # Address CVE GHSA-mqqc-3gqh-h2x8, GHSA-cq5v-8q36-5273
   "pyasn1>=0.6.3",            # Address CVE GHSA-jr27-m4p2-rc6r
   "wheel>=0.46.2",            # Address CVE GHSA-8rrh-rw8j-w5fx
   "protobuf>=6.33.5",         # Address CVE GHSA-7gcm-g887-7qv7
@@ -549,8 +562,9 @@ constraint-dependencies = [
   "pygments>=2.20.0",         # Address CVE GHSA-5239-wwwm-4pmq
   "cbor2>=5.9.0",             # Address CVE GHSA-3c37-wwvx-h642
   "onnx>=1.21.0rc4",          # Address CVE GHSA-hqmj-h5c6-369m
-  "cryptography>=48.0.1",     # Address CVE GHSA-6w46-j5rx-g56g, GHSA-537c-gmf6-5ccf
   "orjson>=3.11.6",           # Address CVE GHSA-hx9q-6w63-j58v
+  # Arrives transitively via wandb.
+  "gitpython>=3.1.58",        # Address CVE GHSA-6p8h-3wgx-97gf, GHSA-94p4-4cq8-9g67, GHSA-fjr4-x663-mwxc, GHSA-r9mr-m37c-5fr3
   "pyjwt>=2.13.0",
   "dulwich>=1.2.5",
   "diffusers>=0.38.0",
@@ -558,6 +572,10 @@ constraint-dependencies = [
   "prometheus-fastapi-instrumentator>=8.0.2",
   "av>=17.1.0",                               # Address CVE-2026-40962 (FFmpeg 8.0.1 bundled in av.libs; 17.1.0+ ships FFmpeg 8.1.x)
   "opencv-python-headless>=5.0.0",            # CVE floor: patches CVE-2025-9951, CVE-2025-1594, CVE-2024-31582 (bundled FFmpeg 5.1.6 in 4.x)
+  # Every prime-sandboxes release requires connectrpc<0.12, and every verifiers (Prime Intellect hub)
+  # environment depends on it. e2b>=2.57, pulled in by nemo-gym[sandbox], requires connectrpc>=0.12.1,
+  # so those environments could not install next to the image's Gym. Gym's e2b>=2.46 range is met by 2.56.
+  "connectrpc<0.12",
 ]
 
 # NOTE: do not exclude `nvidia-cutlass-dsl-libs-base` again. The 4.5.x workaround for
