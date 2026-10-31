@@ -437,20 +437,23 @@ class CheckpointManager:
         self,
         checkpoint_path: PathLike,
         wait_fn: Optional[Callable[[], None]] = None,
+        on_success: Optional[Callable[[], None]] = None,
     ) -> None:
         """Start background finalization of a checkpoint.
 
         Spawns a daemon thread that calls wait_fn (blocks until async writers
-        finish), renames tmp_step_N to step_N, then queues old-checkpoint
-        deletion. All writes to checkpoint_path must be complete before calling
-        this. If a previous finalization is still active, blocks until it
-        completes.
+        finish), renames tmp_step_N to step_N, calls on_success, then queues
+        old-checkpoint deletion. All writes to checkpoint_path must be complete
+        before calling this. If a previous finalization is still active, blocks
+        until it completes.
 
         Args:
             checkpoint_path: Path to tmp_step_N directory from init_tmp_checkpoint().
             wait_fn: Callable that blocks until all async writes are complete.
                 For Megatron async save: policy.finalize_async_save.
                 For sync saves: None (rename immediately).
+            on_success: Callable invoked after the completed checkpoint is renamed.
+                Use this for success markers that must not precede async writes.
         """
         self.finalize_pending()
         self._pending_checkpoint_path = as_path(checkpoint_path)
@@ -475,6 +478,8 @@ class CheckpointManager:
                     if wait_fn is not None:
                         wait_fn()
                     self._storage.publish(checkpoint_path)
+                    if on_success is not None:
+                        on_success()
                     # Prune old checkpoints off the critical path. Surface any
                     # failure via a done-callback so a broken delete is not
                     # silently swallowed (the discarded Future would otherwise

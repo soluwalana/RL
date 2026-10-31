@@ -374,7 +374,7 @@ def validate_and_prepare_config(
     # Load model config
     model_config = AutoConfig.from_pretrained(
         model_name,
-        torch_dtype=dtype,
+        dtype=dtype,  # transformers dropped the torch_dtype alias
         trust_remote_code=True,
         attn_implementation="flash_attention_2" if enable_seq_packing else None,
         **hf_config_overrides,

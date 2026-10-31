@@ -2511,3 +2511,52 @@ def test_spinup_hands_gym_the_policy_api_key_through_the_environment(monkeypatch
     without_key = spin_up(None)
     assert without_key["policy_api_key"] == "dummy_key"
     assert "NEMO_RL_POLICY_API_KEY" not in os.environ
+
+class TestApplyImageVenvDefaults:
+    """Gym's `uv pip install` must target the venv, not whatever UV_PYTHON points at.
+
+    The training image sets UV_PYTHON to an absolute interpreter path so RL's checked-in
+    .python-version cannot pin an unpatched CPython. An absolute UV_PYTHON outranks the
+    venv Gym just activated, so without uv_pip_set_python the installs land in the
+    read-only interpreter tree and every Gym server dies with
+    "Permission denied ... site-packages" -- surfacing only as
+    "Process `policy_model` finished unexpectedly!".
+    """
+
+    def test_sets_uv_pip_set_python(self):
+        from nemo_rl.environments.nemo_gym import apply_image_venv_defaults
+
+        cfg: dict = {}
+        apply_image_venv_defaults(cfg)
+        assert cfg["uv_pip_set_python"] is True
+
+    def test_explicit_value_wins(self):
+        """setdefault, not assignment: a job that sets this deliberately keeps its value."""
+        from nemo_rl.environments.nemo_gym import apply_image_venv_defaults
+
+        cfg: dict = {"uv_pip_set_python": False}
+        apply_image_venv_defaults(cfg)
+        assert cfg["uv_pip_set_python"] is False
+
+    def test_venv_and_cache_dirs_are_passed_through(self, monkeypatch):
+        from nemo_rl.environments import nemo_gym as ng
+
+        monkeypatch.setattr(ng, "get_nemo_gym_uv_cache_dir", lambda: "/opt/uv_cache")
+        monkeypatch.setattr(ng, "get_nemo_gym_venv_dir", lambda: "/opt/gym_venvs")
+        cfg: dict = {}
+        ng.apply_image_venv_defaults(cfg)
+        assert cfg == {
+            "uv_cache_dir": "/opt/uv_cache",
+            "uv_venv_dir": "/opt/gym_venvs",
+            "uv_pip_set_python": True,
+        }
+
+    def test_omits_dirs_when_unset(self, monkeypatch):
+        """Outside a container both getters return None; those keys stay absent."""
+        from nemo_rl.environments import nemo_gym as ng
+
+        monkeypatch.setattr(ng, "get_nemo_gym_uv_cache_dir", lambda: None)
+        monkeypatch.setattr(ng, "get_nemo_gym_venv_dir", lambda: None)
+        cfg: dict = {}
+        ng.apply_image_venv_defaults(cfg)
+        assert cfg == {"uv_pip_set_python": True}

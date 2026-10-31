@@ -830,6 +830,23 @@ class TestBeginFinalization:
         assert call_order == ["wait_start", "wait_end"]
         assert (checkpoint_dir / "step_1").exists()
 
+    def test_on_success_runs_after_wait_and_rename(self, async_manager, checkpoint_dir):
+        """Success markers must observe a fully written, finalized checkpoint."""
+        call_order = []
+
+        def mock_wait():
+            call_order.append("wait")
+
+        def on_success():
+            assert (checkpoint_dir / "step_1").exists()
+            call_order.append("success")
+
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=mock_wait, on_success=on_success)
+        async_manager.finalize_pending()
+
+        assert call_order == ["wait", "success"]
+
     def test_begin_blocks_if_previous_pending(self, async_manager, checkpoint_dir):
         """Second begin_finalization blocks until first completes."""
         barrier = threading.Event()

@@ -62,6 +62,12 @@ from nemo_rl.distributed.virtual_cluster import (
     _get_free_port_local,
     _get_node_ip_local,
 )
+from nemo_rl.environments.gym_env_package import (
+    configure_environment_wheelhouse,
+    install_environment_wheels,
+    isolate_uv_from_ambient_project,
+    register_environment_search_root,
+)
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.environments.nemo_gym_multimodal import (
     _has_image_before_first_trainable_output,
@@ -117,7 +123,7 @@ from nemo_rl.telemetry.span_groups import RLSpanGroup
 from nemo_rl.utils.config import warn_if_config_path_overridden
 from nemo_rl.utils.routed_experts_codec import decode_routed_experts
 from nemo_rl.utils.timer import Timer
-from nemo_rl.utils.venvs import make_actor_runtime_env
+from nemo_rl.utils.venvs import git_root, make_actor_runtime_env
 
 NEMO_GYM_ACTOR_FQN = "nemo_rl.environments.nemo_gym.NemoGym"
 NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S = 120
@@ -406,7 +412,16 @@ def get_nemo_gym_uv_cache_dir() -> str | None:
     """
     if not os.environ.get("NRL_CONTAINER"):
         return None
-    return subprocess.check_output(["uv", "cache", "dir"]).decode().strip()
+    # --directory pins uv's project discovery to the NeMo-RL checkout, as
+    # create_local_venv does. Without it uv walks up from the caller's working
+    # directory and adopts whatever pyproject.toml it finds there - including that
+    # project's [tool.uv] required-version, which makes `uv cache dir` exit non-zero
+    # when it disagrees with the uv on PATH.
+    return (
+        subprocess.check_output(["uv", "cache", "dir", "--directory", git_root])
+        .decode()
+        .strip()
+    )
 
 
 def get_nemo_gym_venv_dir() -> str | None:
@@ -463,6 +478,14 @@ class NemoGymConfig(TypedDict):
     # server, switches run_rollouts to receipt mode, and assembles receipts
     # from the manifest control route. None/absent = legacy token-echo path.
     token_capture: NotRequired[Dict[str, Any] | None]
+    # Staging directory of a platform environment FileSet, when one was supplied.
+    # Colocated runs need it for the same two reasons the sandboxed host does: it is
+    # Gym's search root for native-v1 server trees, and the source of the vendored
+    # wheels for wheels-v1 / adapter-wheels-v1. Absent for standalone NeMo-RL.
+    environment_path: NotRequired[str | None]
+    # Whether that package vendors a complete closure, so uv can resolve without an index.
+    # Decided by the platform, which owns the package format; NeMo-RL only honours it.
+    environment_offline: NotRequired[bool]
 
 
 # Gym control-plane server name (the model server hosting the ledger) and the
@@ -879,9 +902,25 @@ class NemoGym(EnvironmentInterface):
         _gym_port_high = self.cfg.get("port_range_high", DEFAULT_GYM_PORT_RANGE_HIGH)
         self.head_server_port = _get_free_port_local(_gym_port_low, _gym_port_high)
 
-        from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
+        # Registered before nemo_gym is imported, not just before RunHelper.start:
+        # _augment_sys_path() folds the extra roots into sys.path at import time.
+        environment_path = self.cfg.get("environment_path")
+        register_environment_search_root(environment_path)
+        # Before start(): Gym composes the per-server install itself, so uv's environment
+        # is the only way the wheelhouse reaches it, and the only way to keep the platform
+        # workspace at WORKDIR from imposing its pins on the environment's venvs.
+        isolate_uv_from_ambient_project()
+        configure_environment_wheelhouse(
+            environment_path, offline=bool(self.cfg.get("environment_offline", False))
+        )
+
+        from nemo_gym.cli.env import RunHelper
+        from nemo_gym.config_types import BaseServerConfig
+        from nemo_gym.global_config import (
+            HEAD_SERVER_KEY_NAME,
+            GlobalConfigDictParserConfig,
+        )
         from nemo_gym.rollout_collection import RolloutCollectionHelper
-        from nemo_gym.server_utils import HEAD_SERVER_KEY_NAME, BaseServerConfig
         from omegaconf import DictConfig
 
         RELATIVE_PATH = "nemo_rl/environments/nemo_gym.py"
@@ -1013,6 +1052,8 @@ Depending on your data shape, you may want to change these values."""
                 skip_load_from_cli=True,
             )
         )
+        # After start(): the per-server venvs do not exist until it returns.
+        install_environment_wheels(initial_global_config_dict, environment_path)
 
         try:
             _wait_for_external_services(self.cfg.get("external_service_readiness"))
@@ -2056,6 +2097,30 @@ def setup_nemo_gym_config(config, tokenizer) -> None:
         env_cfg.setdefault("tokenizer_config", dict(config.policy["tokenizer"]))
 
 
+def apply_image_venv_defaults(nemo_gym_dict: dict[str, Any]) -> None:
+    """Point Gym at the image-baked uv cache/venvs and make its installs target them.
+
+    ``setdefault`` throughout: an explicit value in the job's own config wins.
+
+    ``uv_pip_set_python`` is the load-bearing one. Gym's ``uv pip install`` names no
+    target, so it resolves one from the environment. The training image sets
+    ``UV_PYTHON`` to an absolute path (``/opt/cpython/bin/python3.13``, needed so RL's
+    checked-in ``.python-version`` cannot pin an unpatched interpreter), and an absolute
+    ``UV_PYTHON`` outranks the venv Gym just activated. Installs then land in the
+    read-only interpreter tree and every Gym server dies with
+    ``Permission denied ... site-packages``, surfacing only as
+    ``Process 'policy_model' finished unexpectedly!``. Setting this makes Gym pass
+    ``--python <venv>/bin/python`` explicitly instead of inferring a target.
+    """
+    uv_cache_dir = get_nemo_gym_uv_cache_dir()
+    if uv_cache_dir is not None:
+        nemo_gym_dict.setdefault("uv_cache_dir", uv_cache_dir)
+    uv_venv_dir = get_nemo_gym_venv_dir()
+    if uv_venv_dir is not None:
+        nemo_gym_dict.setdefault("uv_venv_dir", uv_venv_dir)
+    nemo_gym_dict.setdefault("uv_pip_set_python", True)
+
+
 def build_nemo_gym_config(
     env_configs: dict[str, Any],
     *,
@@ -2138,6 +2203,21 @@ def _build_gym_actor_config(
     # dict-shaped top-level keys are parsed as server instance configs.
     for key in SHARDING_CONFIG_KEYS:
         nemo_gym_dict.pop(key, None)
+    # Sandboxed-mode keys and the colocated affinity hint never belong in Gym's
+    # global config. A dict-shaped value there is parsed as a server instance.
+    # environment_path stays on NemoGymConfig so the colocated actor can register
+    # the FileSet and install its wheels; it must not become a Gym server config.
+    environment_path = nemo_gym_dict.pop("environment_path", None)
+    environment_offline = bool(nemo_gym_dict.pop("environment_offline", False))
+    for key in (
+        "sandboxed",
+        "host_provider",
+        "sandbox",
+        "job_id",
+        "episode_broker",
+        "num_gpu_nodes",
+    ):
+        nemo_gym_dict.pop(key, None)
 
     # NeMo-RL-side detection knobs are top-level NemoGymConfig fields
     # (where the detector reads them), not part of Gym's global config.
@@ -2159,14 +2239,7 @@ def _build_gym_actor_config(
         if _value is not None:
             multimodal_flags[_flag] = bool(_value)
 
-    # Pass prebuilt cache + venv dirs through the global config so the gym reuses
-    # image-baked venvs instead of rebuilding them.
-    uv_cache_dir = get_nemo_gym_uv_cache_dir()
-    if uv_cache_dir is not None:
-        nemo_gym_dict.setdefault("uv_cache_dir", uv_cache_dir)
-    uv_venv_dir = get_nemo_gym_venv_dir()
-    if uv_venv_dir is not None:
-        nemo_gym_dict.setdefault("uv_venv_dir", uv_venv_dir)
+    apply_image_venv_defaults(nemo_gym_dict)
 
     routed_experts_dtype = (
         resolve_routed_experts_dtype_name_for_model(model_name)
@@ -2187,6 +2260,8 @@ def _build_gym_actor_config(
         external_service_readiness=external_service_readiness,
         initial_global_config_dict=nemo_gym_dict,
         token_capture=token_capture,
+        environment_path=environment_path,
+        environment_offline=environment_offline,
         **port_range,
         **multimodal_flags,
     )
@@ -2233,6 +2308,7 @@ class NemoGymShardSet:
         repr=False,
         compare=False,
     )
+    _shut_down: bool = field(default=False, repr=False)
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -2332,7 +2408,21 @@ class NemoGymShardSet:
         timeout: float | None = NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S,
         force_kill: bool = True,
     ) -> None:
-        """Stop every actor, then release the bundles they were pinned to."""
+        """Stop every actor, then release the bundles they were pinned to.
+
+        A second call does nothing. Training shuts this set down from
+        ``grpo_train`` and again from the driver, and the second pass used to
+        call ``shutdown`` on actors ``ray.kill`` had already removed.
+
+        ``force_kill`` applies only when this call itself fails before the
+        per-actor teardown finishes. An actor whose ``shutdown()`` returns has
+        already destroyed its host; killing it then races that worker's
+        teardown and aborts the process. An actor whose ``shutdown()`` raises
+        or times out is killed inside ``shutdown_environments``.
+        """
+        if self._shut_down:
+            return
+        self._shut_down = True
         handles = self.all_handles
         try:
             shutdown_environments(
@@ -2345,12 +2435,14 @@ class NemoGymShardSet:
             )
         except Exception as error:
             print(f"Failed to shut down NeMo-Gym actors: {error}")
-        if force_kill:
-            for handle in handles:
-                try:
-                    ray.kill(handle)
-                except Exception as error:
-                    print(f"Failed to kill NeMo-Gym actor after shutdown: {error}")
+            if force_kill:
+                for handle in handles:
+                    try:
+                        ray.kill(handle)
+                    except Exception as kill_error:
+                        print(
+                            f"Failed to kill NeMo-Gym actor after shutdown: {kill_error}"
+                        )
         if self.placement_group is not None:
             try:
                 remove_placement_group(self.placement_group)
@@ -2377,6 +2469,68 @@ def as_nemo_gym_shard_set(environment: Any) -> NemoGymShardSet:
     if isinstance(environment, NemoGymShardSet):
         return environment
     return NemoGymShardSet(handles={DEFAULT_SHARD_NAME: [environment]})
+
+
+def _build_sandboxed_gym_actor(
+    nemo_gym_dict: dict[str, Any],
+    *,
+    base_urls: list[str],
+    model_name: str,
+    tokenizer: PreTrainedTokenizerBase,
+    enable_router_replay: bool,
+    use_fastokens: bool,
+    token_capture: Optional[dict[str, Any]],
+) -> NemoGymShardSet:
+    """Provision ``SandboxedGymActor`` instead of the colocated ``NemoGym`` actor.
+
+    The sandbox keys are peeled off first so the remainder is still a Gym global
+    config. The tokenizer is installed once after spinup, same as ``NemoGym``.
+    """
+    from sandboxed_gym.host.models import NemoGymSandboxedConfig
+    from nemo_rl.environments.sandbox.nemo_gym_actor import (
+        SANDBOXED_GYM_ACTOR_FQN,
+        SandboxedGymActor,
+    )
+
+    gym_dict = dict(nemo_gym_dict)
+    sandboxed_cfg = NemoGymSandboxedConfig.model_validate(
+        {
+            "sandboxed": True,
+            "host_provider": gym_dict.pop("host_provider", "opensandbox"),
+            "environment_path": gym_dict.pop("environment_path", None),
+            "environment_offline": bool(gym_dict.pop("environment_offline", False)),
+            "sandbox": gym_dict.pop("sandbox", None),
+            "job_id": gym_dict.pop("job_id", None),
+            "episode_broker": gym_dict.pop("episode_broker", None) or {},
+        }
+    )
+    gym_dict.pop("sandboxed", None)
+    actor_config = dict(
+        _build_gym_actor_config(
+            gym_dict,
+            base_urls=base_urls,
+            model_name=model_name,
+            enable_router_replay=enable_router_replay,
+            use_fastokens=use_fastokens,
+            token_capture=token_capture,
+        )
+    )
+    actor_config["sandboxed"] = sandboxed_cfg.model_dump(mode="python")
+
+    actor = SandboxedGymActor.options(
+        runtime_env=make_actor_runtime_env(SANDBOXED_GYM_ACTOR_FQN)
+    ).remote(actor_config)
+    shard_set = NemoGymShardSet(handles={DEFAULT_SHARD_NAME: [actor]})
+    try:
+        ray.get(actor._spinup.remote())
+        ray.get(actor.set_tokenizer.remote(tokenizer))
+    except BaseException:
+        shard_set.shutdown(
+            timeout=NEMO_GYM_GRACEFUL_SHUTDOWN_TIMEOUT_S,
+            force_kill=True,
+        )
+        raise
+    return shard_set
 
 
 def build_nemo_gym_actors(
@@ -2413,6 +2567,16 @@ def build_nemo_gym_actors(
             actors already created are torn down first.
     """
     nemo_gym_dict = dict(env_configs["nemo_gym"])
+    if nemo_gym_dict.get("sandboxed"):
+        return _build_sandboxed_gym_actor(
+            nemo_gym_dict,
+            base_urls=base_urls,
+            model_name=model_name,
+            tokenizer=tokenizer,
+            enable_router_replay=enable_router_replay,
+            use_fastokens=use_fastokens,
+            token_capture=token_capture,
+        )
     plan = parse_shard_plan(nemo_gym_dict)
 
     if plan is None:

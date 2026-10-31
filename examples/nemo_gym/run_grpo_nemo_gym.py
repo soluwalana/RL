@@ -58,6 +58,7 @@ from nemo_rl.utils.config import (
     parse_hydra_overrides,
     register_omegaconf_resolvers,
 )
+from nemo_rl.utils.config_redact import redact_config_secrets
 from nemo_rl.utils.logger import get_next_experiment_dir, log_container_init_timing
 from nemo_rl.utils.outdated_config_checks import check_outdated_config
 from nemo_rl.utils.timer import Timer
@@ -243,7 +244,7 @@ The validation set you pass in will directly be used for validation with no addi
 
     # Print config
     print("Final config:")
-    pprint.pprint(config)
+    pprint.pprint(redact_config_secrets(config.model_dump(mode="python")))
 
     with rl_init_timer.time("ray_connect"):
         # Must precede init_ray() — see maybe_configure_data_plane_env's docstring.
@@ -367,7 +368,8 @@ The validation set you pass in will directly be used for validation with no addi
             )
     finally:
         if not trainer_owns_environment_shutdown:
-            shutdown_environments(task_to_env, val_task_to_env)
+            # OpenSandbox destroy_host needs longer than the default.
+            shutdown_environments(task_to_env, val_task_to_env, timeout=300)
         try:
             policy_generation.shutdown()
         except Exception as error:
