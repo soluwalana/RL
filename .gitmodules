@@ -11,5 +11,5 @@
 [submodule "3rdparty/Gym-workspace/Gym"]
 	path = 3rdparty/Gym-workspace/Gym
 	url = https://github.com/soluwalana/Gym.git
-	branch = nmp/customizer
+	branch = nhx/rl-20261101
 	shallow = true
