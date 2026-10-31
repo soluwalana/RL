@@ -274,6 +274,19 @@ class SandboxedGymActor(EnvironmentInterface):
         # atexit and signal handlers cannot await, so they take the blocking path.
         install_termination_cleanup(self._shutdown_blocking)
 
+    def list_entries(self) -> dict[str, list[str]]:
+        """Routes the job host spawned, read from Gym's resolved config in that process.
+
+        ``validate_dataset_agent_coverage`` calls this on the actor after spinup.
+        The resolved config is not in this process: the host started Gym, so the
+        session asks ``GET /entries`` there.
+        """
+        if self._session is None:
+            raise RuntimeError(
+                "list_entries() needs a running Gym stack; call _spinup() first."
+            )
+        return self._session.list_entries()
+
     def set_tokenizer(self, tokenizer: PreTrainedTokenizerBase) -> None:
         """Install the tokenizer ``run_rollouts`` postprocesses with.
 

@@ -196,6 +196,23 @@ def _rollout_actor(session):
     return actor
 
 
+def test_list_entries_reads_the_host_before_rollouts():
+    session = _FakeSession([])
+    session.entries = {"clevr_cogent_simple_agent": ["responses_api_agents"]}
+    session.list_entries = lambda: session.entries
+    actor = _rollout_actor(session)
+
+    assert actor.list_entries() == session.entries
+
+
+def test_list_entries_requires_spinup():
+    actor = _actor_class().__new__(_actor_class())
+    actor._session = None
+
+    with pytest.raises(RuntimeError, match="_spinup"):
+        actor.list_entries()
+
+
 def test_postprocess_forwards_the_row_result_and_tokenizer(monkeypatch):
     """Postprocess passes the Gym row, the result, and the tokenizer."""
     from nemo_rl.environments.nemo_gym import NemoGym
