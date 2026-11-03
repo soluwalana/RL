@@ -240,6 +240,52 @@ def test_postprocess_forwards_the_row_result_and_tokenizer(monkeypatch):
     assert seen["args"] == (row, result, tokenizer, True)
 
 
+def test_postprocess_installs_the_actor_processor(monkeypatch):
+    """The bare NemoGym helper otherwise leaves _processor unset and drops images."""
+    from nemo_rl.environments.nemo_gym import NemoGym
+
+    seen = {}
+
+    def fake(self, row, result, tokenizer, *, include_initial_multimodal_data=True):
+        del row, result, tokenizer, include_initial_multimodal_data
+        seen["processor"] = self._processor
+        seen["pad"] = self._pad_dynamic_image_shapes
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        NemoGym.__ray_metadata__.modified_class,
+        "_postprocess_nemo_gym_to_nemo_rl_result",
+        fake,
+    )
+    actor = _actor_class().__new__(_actor_class())
+    actor._postprocess_cfg = {}
+    actor._processor = object()
+    actor._pad_dynamic_image_shapes = True
+
+    actor._postprocess({}, {}, object())
+
+    assert seen["processor"] is actor._processor
+    assert seen["pad"] is True
+
+
+def test_init_loads_a_non_placeholder_processor(monkeypatch):
+    """tokenizer_config loads the processor. Qwen is not rejected at construction."""
+    sentinel = object()
+
+    def fake_get_tokenizer(config, get_processor=False):
+        assert config == {"name": "org/model"}
+        assert get_processor is True
+        return sentinel
+
+    monkeypatch.setattr("nemo_rl.algorithms.utils.get_tokenizer", fake_get_tokenizer)
+    actor = _actor_class().__new__(_actor_class())
+    _actor_class().__init__(
+        actor, {**_actor_cfg(), "tokenizer_config": {"name": "org/model"}}
+    )
+
+    assert actor._processor is sentinel
+
+
 def _patch_rollout_postprocess(monkeypatch, actor):
     monkeypatch.setattr(
         actor,
@@ -285,6 +331,40 @@ async def test_run_rollouts_posts_then_postprocesses(monkeypatch):
     assert "t/await_results" in streamed[0][3]
     # The row went out tagged, which is what let the result come back joinable.
     assert session.posted[0][0][SG_EXAMPLE_ID] == 7
+
+
+@pytest.mark.asyncio
+async def test_run_rollouts_posts_the_prompt_image(monkeypatch):
+    """The body handed to the host still contains the image part."""
+    from sandboxed_gym.runtime.gym_host_runtime import SG_EXAMPLE_ID
+
+    session = _FakeSession(
+        lambda examples: [
+            {SG_EXAMPLE_ID: row[SG_EXAMPLE_ID], "reward": 1.0} for row in examples
+        ]
+    )
+    actor = _rollout_actor(session)
+    _patch_rollout_postprocess(monkeypatch, actor)
+    image = {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}
+    examples = [
+        {
+            "_rowidx": 3,
+            "agent_ref": {"name": "agent_a"},
+            "responses_create_params": {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [image, {"type": "input_text", "text": "count"}],
+                    }
+                ]
+            },
+        }
+    ]
+
+    await _stream(actor, examples)
+
+    posted = session.posted[0][0]
+    assert posted["responses_create_params"]["input"][0]["content"][0] == image
 
 
 @pytest.mark.asyncio

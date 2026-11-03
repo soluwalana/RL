@@ -663,7 +663,7 @@ def test_reattach_keeps_rollout_matched_media_when_token_counts_already_match():
     class _TextTokenizer:
         model_input_names = ["input_ids"]
 
-    class _Processor:
+    class NemotronNanoVLV2Processor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
@@ -683,7 +683,7 @@ def test_reattach_keeps_rollout_matched_media_when_token_counts_already_match():
     attach_image_model_inputs_to_message(
         target_user,
         images=[Image.new("RGB", (2, 2))],
-        processor=_Processor(),
+        processor=NemotronNanoVLV2Processor(),
         expected_num_tokens_per_image=[256],
     )
     rollout_media = target_user["pixel_values"]
@@ -1742,7 +1742,7 @@ def test_nemo_gym_dedup_omits_actor_initial_tensor_and_preserves_later_media():
     class _TextTokenizer:
         model_input_names = ["input_ids"]
 
-    class _Processor:
+    class NemotronNanoVLV2Processor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
@@ -1761,7 +1761,7 @@ def test_nemo_gym_dedup_omits_actor_initial_tensor_and_preserves_later_media():
 
     class _MockSelf:
         cfg = {}
-        _processor = _Processor()
+        _processor = NemotronNanoVLV2Processor()
 
     postprocess = (
         NemoGym.__ray_metadata__.modified_class._postprocess_nemo_gym_to_nemo_rl_result
@@ -1975,7 +1975,7 @@ def test_nemo_gym_dedup_keeps_authoritative_changed_seed_media(
     class _TextTokenizer:
         model_input_names = ["input_ids"]
 
-    class _Processor:
+    class NemotronNanoVLV2Processor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
@@ -1994,7 +1994,7 @@ def test_nemo_gym_dedup_keeps_authoritative_changed_seed_media(
 
     class _MockSelf:
         cfg = {}
-        _processor = _Processor()
+        _processor = NemotronNanoVLV2Processor()
 
     result = (
         NemoGym.__ray_metadata__.modified_class._postprocess_nemo_gym_to_nemo_rl_result(

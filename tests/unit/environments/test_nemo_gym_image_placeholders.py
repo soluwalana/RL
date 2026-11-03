@@ -132,6 +132,73 @@ def test_ragged_pixel_values_reject_mixed_channel_counts():
         )
 
 
+class ChatTemplateVisionProcessor:
+    """Not a Nemotron name, so attach must call apply_chat_template."""
+
+    image_token = "<|image_pad|>"
+    model_input_names = ["input_ids", "pixel_values", "image_grid_thw"]
+
+    class _ImageProcessor:
+        model_input_names = ["pixel_values", "image_grid_thw"]
+
+    class _Tokenizer:
+        model_input_names = ["input_ids"]
+        unk_token_id = 0
+
+        def convert_tokens_to_ids(self, token):
+            assert token == "<|image_pad|>"
+            return 99
+
+    image_processor = _ImageProcessor()
+    tokenizer = _Tokenizer()
+
+    def __init__(self, image_token_ids: list[int]):
+        self._image_token_ids = image_token_ids
+        self.messages = None
+
+    def apply_chat_template(
+        self, messages, *, tokenize, add_generation_prompt, return_tensors, return_dict
+    ):
+        assert tokenize is True
+        assert add_generation_prompt is True
+        assert return_tensors == "pt"
+        assert return_dict is True
+        self.messages = messages
+        count = len(messages[0]["content"])
+        return {
+            "input_ids": torch.tensor([self._image_token_ids]),
+            "pixel_values": torch.ones(count, 3),
+            "image_grid_thw": torch.tensor([[1, 2, 2]] * count),
+        }
+
+
+def test_chat_template_processor_attaches_packed_tensors_from_pil_content():
+    """A processor outside the Nemotron allowlist reads images from message content."""
+    processor = ChatTemplateVisionProcessor([99, 99])
+    message = {"role": "user", "content": "", "token_ids": torch.tensor([1, 99, 99, 2])}
+    images = _images(2)
+
+    attach_image_model_inputs_to_message(message, images=images, processor=processor)
+
+    content = processor.messages[0]["content"]
+    assert [part["type"] for part in content] == ["image", "image"]
+    assert content[0]["image"] is images[0]
+    assert message["token_ids"].tolist() == [1, 99, 99, 2]
+    assert "input_ids" not in message
+    assert message["pixel_values"].as_tensor() is not None
+    assert message["image_grid_thw"].as_tensor() is not None
+
+
+def test_chat_template_processor_rejects_an_image_token_count_mismatch():
+    processor = ChatTemplateVisionProcessor([99])
+    message = {"role": "user", "content": "", "token_ids": torch.tensor([99, 99])}
+
+    with pytest.raises(ValueError, match="misaligned media"):
+        attach_image_model_inputs_to_message(
+            message, images=_images(1), processor=processor
+        )
+
+
 def test_attach_is_a_noop_without_images_or_processor():
     user_message: dict = {}
     attach_image_model_inputs_to_message(

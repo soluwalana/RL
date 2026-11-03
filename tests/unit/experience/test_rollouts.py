@@ -184,7 +184,7 @@ def test_attach_image_model_inputs_keeps_rollout_tokens_and_packs_media():
             assert token == "<image>"
             return 8
 
-    class _Processor:
+    class NemotronNanoVLV2Processor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
@@ -205,7 +205,9 @@ def test_attach_image_model_inputs_keeps_rollout_tokens_and_packs_media():
     message = {"role": "user", "content": "", "token_ids": rollout_tokens}
     images = [Image.new("RGB", (2, 3), color="red")]
 
-    attach_image_model_inputs_to_message(message, images=images, processor=_Processor())
+    attach_image_model_inputs_to_message(
+        message, images=images, processor=NemotronNanoVLV2Processor()
+    )
 
     packed = message["pixel_values"]
     assert isinstance(packed, PackedTensor)

@@ -53,7 +53,6 @@ from nemo_rl.data.multimodal_utils import (
     extract_input_media_sources_from_responses_messages,
     image_size_from_source,
     media_sources_equal,
-    uses_image_placeholder,
 )
 from nemo_rl.data_plane.schema import MASK_SAMPLE
 from nemo_rl.distributed.virtual_cluster import (
@@ -855,16 +854,6 @@ class NemoGym(EnvironmentInterface):
             from nemo_rl.algorithms.utils import get_tokenizer
 
             self._processor = get_tokenizer(tokenizer_config, get_processor=True)
-            # attach_image_model_inputs_to_message assumes a placeholder-style
-            # processor (imgs_sizes / num_frames reconstruction + pad_to_max_shape
-            # PackedTensor build). A non-placeholder VLM would silently produce
-            # wrong multimodal tensors — fail at actor construction instead.
-            assert uses_image_placeholder(self._processor), (
-                "NemoGym multimodal path assumes a placeholder-style processor "
-                "(see _PLACEHOLDER_STYLE_PROCESSOR_NAMES in nemo_rl/data/multimodal_utils.py); "
-                f"got {type(self._processor).__name__}. Update "
-                "attach_image_model_inputs_to_message before enabling."
-            )
 
     def _require_spinup(self) -> None:
         """Raise a diagnosable error if this instance never ran :meth:`_spinup`."""

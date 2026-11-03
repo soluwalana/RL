@@ -237,6 +237,16 @@ class SandboxedGymActor(EnvironmentInterface):
         # Installed by set_tokenizer at spinup. run_rollouts used to take the
         # tokenizer as an argument, and the dispatcher no longer sends one.
         self._tokenizer: PreTrainedTokenizerBase | None = None
+        # Same reconstruction as NemoGym: the processor stays in this process and
+        # is what turns prompt and tool images into training tensors. A processor
+        # outside the Nemotron placeholder set is valid; attach branches on it.
+        self._processor: Any | None = None
+        self._pad_dynamic_image_shapes = bool(cfg.get("pad_dynamic_image_shapes"))
+        tokenizer_config = cfg.get("tokenizer_config")
+        if tokenizer_config:
+            from nemo_rl.algorithms.utils import get_tokenizer
+
+            self._processor = get_tokenizer(tokenizer_config, get_processor=True)
         self._postprocess_cfg = {
             "invalid_tool_call_patterns": cfg.get("invalid_tool_call_patterns"),
             "thinking_tags": cfg.get("thinking_tags"),
@@ -310,6 +320,12 @@ class SandboxedGymActor(EnvironmentInterface):
         nemo_gym_cls = NemoGym.__ray_metadata__.modified_class
         helper = nemo_gym_cls.__new__(nemo_gym_cls)
         helper.cfg = self._postprocess_cfg
+        # __new__ skips NemoGym.__init__, which is where the colocated actor
+        # installs these. Without them postprocess skips image attach.
+        helper._processor = getattr(self, "_processor", None)
+        helper._pad_dynamic_image_shapes = getattr(
+            self, "_pad_dynamic_image_shapes", False
+        )
         return helper._postprocess_nemo_gym_to_nemo_rl_result(
             nemo_gym_row,
             nemo_gym_result,
