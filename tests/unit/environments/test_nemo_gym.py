@@ -1742,15 +1742,30 @@ def test_nemo_gym_dedup_omits_actor_initial_tensor_and_preserves_later_media():
     class _TextTokenizer:
         model_input_names = ["input_ids"]
 
-    class NemotronNanoVLV2Processor:
+    class ChatTemplateVisionProcessor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
         model_input_names = ["input_ids", "pixel_values"]
 
-        def __call__(self, *, text, images, return_tensors):
-            assert text == "<image>" * len(images)
+        def apply_chat_template(
+            self,
+            messages,
+            *,
+            tokenize,
+            add_generation_prompt,
+            return_tensors,
+            return_dict,
+        ):
+            assert tokenize is True
+            assert add_generation_prompt is True
             assert return_tensors == "pt"
+            assert return_dict is True
+            images = [
+                part["image"]
+                for part in messages[0]["content"]
+                if part["type"] == "image"
+            ]
             red_values = [image.getpixel((0, 0))[0] for image in images]
             return {
                 "input_ids": torch.tensor([[1]]),
@@ -1761,7 +1776,7 @@ def test_nemo_gym_dedup_omits_actor_initial_tensor_and_preserves_later_media():
 
     class _MockSelf:
         cfg = {}
-        _processor = NemotronNanoVLV2Processor()
+        _processor = ChatTemplateVisionProcessor()
 
     postprocess = (
         NemoGym.__ray_metadata__.modified_class._postprocess_nemo_gym_to_nemo_rl_result
@@ -1975,15 +1990,30 @@ def test_nemo_gym_dedup_keeps_authoritative_changed_seed_media(
     class _TextTokenizer:
         model_input_names = ["input_ids"]
 
-    class NemotronNanoVLV2Processor:
+    class ChatTemplateVisionProcessor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
         model_input_names = ["input_ids", "pixel_values"]
 
-        def __call__(self, *, text, images, return_tensors):
-            assert text == "<image>" * len(images)
+        def apply_chat_template(
+            self,
+            messages,
+            *,
+            tokenize,
+            add_generation_prompt,
+            return_tensors,
+            return_dict,
+        ):
+            assert tokenize is True
+            assert add_generation_prompt is True
             assert return_tensors == "pt"
+            assert return_dict is True
+            images = [
+                part["image"]
+                for part in messages[0]["content"]
+                if part["type"] == "image"
+            ]
             red_values = [image.getpixel((0, 0))[0] for image in images]
             return {
                 "input_ids": torch.tensor([[1]]),
@@ -1994,7 +2024,7 @@ def test_nemo_gym_dedup_keeps_authoritative_changed_seed_media(
 
     class _MockSelf:
         cfg = {}
-        _processor = NemotronNanoVLV2Processor()
+        _processor = ChatTemplateVisionProcessor()
 
     result = (
         NemoGym.__ray_metadata__.modified_class._postprocess_nemo_gym_to_nemo_rl_result(
@@ -2511,6 +2541,7 @@ def test_spinup_hands_gym_the_policy_api_key_through_the_environment(monkeypatch
     without_key = spin_up(None)
     assert without_key["policy_api_key"] == "dummy_key"
     assert "NEMO_RL_POLICY_API_KEY" not in os.environ
+
 
 class TestApplyImageVenvDefaults:
     """Gym's `uv pip install` must target the venv, not whatever UV_PYTHON points at.

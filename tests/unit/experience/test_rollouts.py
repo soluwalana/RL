@@ -184,18 +184,34 @@ def test_attach_image_model_inputs_keeps_rollout_tokens_and_packs_media():
             assert token == "<image>"
             return 8
 
-    class NemotronNanoVLV2Processor:
+    class ChatTemplateVisionProcessor:
         image_token = "<image>"
         image_processor = _ImageProcessor()
         tokenizer = _TextTokenizer()
         model_input_names = ["input_ids", "pixel_values"]
 
-        def __call__(self, *, text, images, return_tensors):
-            assert text == "<image>" * len(images)
+        def apply_chat_template(
+            self,
+            messages,
+            *,
+            tokenize,
+            add_generation_prompt,
+            return_tensors,
+            return_dict,
+        ):
+            assert tokenize is True
+            assert add_generation_prompt is True
             assert return_tensors == "pt"
+            assert return_dict is True
+            images = [
+                part["image"]
+                for part in messages[0]["content"]
+                if part["type"] == "image"
+            ]
             red_values = [image.getpixel((0, 0))[0] for image in images]
+            # One image-token id, matching the single placeholder in the rollout.
             return {
-                "input_ids": torch.tensor([[101, 102]]),
+                "input_ids": torch.tensor([[101, 8]]),
                 "pixel_values": torch.tensor(red_values, dtype=torch.float32).view(
                     -1, 1
                 ),
@@ -206,7 +222,7 @@ def test_attach_image_model_inputs_keeps_rollout_tokens_and_packs_media():
     images = [Image.new("RGB", (2, 3), color="red")]
 
     attach_image_model_inputs_to_message(
-        message, images=images, processor=NemotronNanoVLV2Processor()
+        message, images=images, processor=ChatTemplateVisionProcessor()
     )
 
     packed = message["pixel_values"]
