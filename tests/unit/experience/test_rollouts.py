@@ -52,6 +52,7 @@ from nemo_rl.experience.interfaces import (
     NEMO_GYM_GROUP_ATTEMPT_KEY,
     NEMO_GYM_GROUP_ID_KEY,
     NEMO_GYM_ROLLOUT_INDEX_KEY,
+    NEMO_GYM_TASK_INDEX_KEY,
 )
 from nemo_rl.experience.metric_utils import calculate_single_metric, pct
 from nemo_rl.experience.rollout_manager import (
@@ -2940,7 +2941,20 @@ def test_prepare_nemo_gym_rows_stamps_distinct_legacy_prompt_groups():
     assert rows[0][NEMO_GYM_GROUP_ID_KEY] != rows[2][NEMO_GYM_GROUP_ID_KEY]
     assert [row[NEMO_GYM_GROUP_ATTEMPT_KEY] for row in rows] == [0, 0, 0, 0]
     assert [row[NEMO_GYM_ROLLOUT_INDEX_KEY] for row in rows] == [0, 1, 0, 1]
+    assert [row[NEMO_GYM_TASK_INDEX_KEY] for row in rows] == [0, 0, 1, 1]
     assert [row["_rowidx"] for row in rows] == [0, 1, 2, 3]
+
+    prestamped = [
+        {"responses_create_params": {}, NEMO_GYM_TASK_INDEX_KEY: 40},
+        {"responses_create_params": {}, NEMO_GYM_TASK_INDEX_KEY: 40},
+    ]
+    rollouts_mod._prepare_nemo_gym_rows(
+        prestamped,
+        generation_config={"max_new_tokens": 64},
+        sampling_params=SimpleNamespace(temperature=0.7, top_p=0.9),
+        num_generations=2,
+    )
+    assert [row[NEMO_GYM_TASK_INDEX_KEY] for row in prestamped] == [40, 40]
 
 
 def test_rollout_manager_rotates_replicas_and_reports_group_share():

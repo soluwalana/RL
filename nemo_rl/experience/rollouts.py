@@ -2457,6 +2457,7 @@ def _prepare_nemo_gym_rows(
         row[NEMO_GYM_GROUP_ID_KEY] = group_ids[group_index]
         row[NEMO_GYM_GROUP_ATTEMPT_KEY] = group_attempts[group_index]
         row[NEMO_GYM_ROLLOUT_INDEX_KEY] = rollout_index
+        row.setdefault(NEMO_GYM_TASK_INDEX_KEY, group_index)
 
 
 def _bucket_nemo_gym_rows_by_instance(
