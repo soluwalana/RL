@@ -570,6 +570,10 @@ constraint-dependencies = [
   "prometheus-fastapi-instrumentator>=8.0.2",
   "av>=17.1.0",                               # Address CVE-2026-40962 (FFmpeg 8.0.1 bundled in av.libs; 17.1.0+ ships FFmpeg 8.1.x)
   "opencv-python-headless>=5.0.0",            # CVE floor: patches CVE-2025-9951, CVE-2025-1594, CVE-2024-31582 (bundled FFmpeg 5.1.6 in 4.x)
+  # Every prime-sandboxes release requires connectrpc<0.12, and every verifiers (Prime Intellect hub)
+  # environment depends on it. e2b>=2.57, pulled in by nemo-gym[sandbox], requires connectrpc>=0.12.1,
+  # so those environments could not install next to the image's Gym. Gym's e2b>=2.46 range is met by 2.56.
+  "connectrpc<0.12",
 ]
 
 # NOTE: do not exclude `nvidia-cutlass-dsl-libs-base` again. The 4.5.x workaround for
