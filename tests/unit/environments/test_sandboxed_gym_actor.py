@@ -559,7 +559,10 @@ def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
     class _FakeRemote:
         def remote(self, cfg):
             created["cfg"] = cfg
-            return SimpleNamespace(_spinup=SimpleNamespace(remote=lambda: "spin"))
+            return SimpleNamespace(
+                _spinup=SimpleNamespace(remote=lambda: "spin"),
+                set_tokenizer=SimpleNamespace(remote=lambda _tokenizer: None),
+            )
 
     class _FakeActor:
         @staticmethod
@@ -568,7 +571,7 @@ def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
             return _FakeRemote()
 
     monkeypatch.setattr(
-        "nemo_rl.environments.nemo_gym.get_actor_python_env",
+        "nemo_rl.distributed.ray_actor_environment_registry.get_actor_python_env",
         lambda fqn: "/bin/python",
     )
     monkeypatch.setattr("nemo_rl.environments.nemo_gym.ray.get", lambda ref: ref)
@@ -602,10 +605,15 @@ def test_spinup_nemo_gym_actor_selects_sandboxed_path(monkeypatch):
         env_configs,
         base_urls=["http://vllm.svc:8000/v1"],
         model_name="model-x",
+        tokenizer=object(),
         enable_router_replay=False,
+        use_fastokens=False,
+        turn_checkpointing_enabled=False,
     )
     assert handle is not None
     assert created["cfg"]["model_name"] == "model-x"
+    assert created["cfg"]["turn_checkpointing_enabled"] is False
+    assert created["cfg"]["checkpoint_instance"].shard_name == "nemo_gym"
     assert created["cfg"]["initial_global_config_dict"]["config_paths"] == [
         "resources_servers/math/configs/math.yaml"
     ]
@@ -628,7 +636,11 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
     class _FakeRemote:
         def remote(self, cfg):
             created["cfg"] = cfg
-            return SimpleNamespace(_spinup=SimpleNamespace(remote=lambda: "spin"))
+            return SimpleNamespace(
+                _spinup=SimpleNamespace(remote=lambda: "spin"),
+                set_tokenizer=SimpleNamespace(remote=lambda _tokenizer: None),
+                list_environment_server_routes=SimpleNamespace(remote=lambda: None),
+            )
 
     class _FakeNemoGym:
         @staticmethod
@@ -637,7 +649,7 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
             return _FakeRemote()
 
     monkeypatch.setattr(
-        "nemo_rl.environments.nemo_gym.get_actor_python_env",
+        "nemo_rl.distributed.ray_actor_environment_registry.get_actor_python_env",
         lambda fqn: "/bin/python",
     )
     monkeypatch.setattr("nemo_rl.environments.nemo_gym.ray.get", lambda ref: ref)
@@ -663,7 +675,10 @@ def test_spinup_nemo_gym_actor_keeps_colocated_when_not_sandboxed(monkeypatch):
         },
         base_urls=["http://vllm.svc:8000/v1"],
         model_name="model-x",
+        tokenizer=object(),
         enable_router_replay=True,
+        use_fastokens=False,
+        turn_checkpointing_enabled=False,
     )
     assert handle is not None
     assert created["cfg"]["require_routed_experts"] is True
@@ -693,7 +708,11 @@ def test_spinup_nemo_gym_actor_threads_environment_path_to_the_colocated_actor(
     class _FakeRemote:
         def remote(self, cfg):
             created["cfg"] = cfg
-            return SimpleNamespace(_spinup=SimpleNamespace(remote=lambda: "spin"))
+            return SimpleNamespace(
+                _spinup=SimpleNamespace(remote=lambda: "spin"),
+                set_tokenizer=SimpleNamespace(remote=lambda _tokenizer: None),
+                list_environment_server_routes=SimpleNamespace(remote=lambda: None),
+            )
 
     class _FakeNemoGym:
         @staticmethod
@@ -701,7 +720,7 @@ def test_spinup_nemo_gym_actor_threads_environment_path_to_the_colocated_actor(
             return _FakeRemote()
 
     monkeypatch.setattr(
-        "nemo_rl.environments.nemo_gym.get_actor_python_env",
+        "nemo_rl.distributed.ray_actor_environment_registry.get_actor_python_env",
         lambda fqn: "/bin/python",
     )
     monkeypatch.setattr("nemo_rl.environments.nemo_gym.ray.get", lambda ref: ref)
@@ -727,9 +746,10 @@ def test_spinup_nemo_gym_actor_threads_environment_path_to_the_colocated_actor(
         },
         base_urls=["http://vllm.svc:8000/v1"],
         model_name="model-x",
+        tokenizer=object(),
         enable_router_replay=False,
-        routed_experts_dtype="int16",
         use_fastokens=False,
+        turn_checkpointing_enabled=False,
     )
 
     assert created["cfg"]["environment_path"] == "/job/storage/environment"
@@ -757,7 +777,7 @@ def test_the_rebuild_forwards_every_field_the_package_declares():
 
     from nemo_rl.environments import nemo_gym
 
-    source = inspect.getsource(nemo_gym.spinup_nemo_gym_actor)
+    source = inspect.getsource(nemo_gym._build_sandboxed_gym_actor)
     rebuild = source[source.index("NemoGymSandboxedConfig.model_validate") :]
 
     missing = [

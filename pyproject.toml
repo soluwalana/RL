@@ -71,7 +71,10 @@ dependencies = [
   "nccl4py; sys_platform != 'darwin'",                                                                                       # for non-colocated refit
   "cuda-bindings; sys_platform != 'darwin'",                                                                                 # for non-colocated refit
   # Worker venvs run a base sync before backend extras, so NIXL must be available here.
-  "nixl==1.5.2; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+  # The `nixl` metapackage depends on both nixl-cu12 and nixl-cu13. This tree is
+  # CUDA 13, and installing both keeps a second ~0.25 GB copy. Megatron's variant
+  # check can also select the cu12 module when both distributions are present.
+  "nixl-cu13==1.5.2; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "pybase64",                                                                                                 # for sglang refit
   "awscrt>=0.35.0",                                                                                           # for parallel S3 refit transport
   "multi-storage-client[boto3]>=0.50",                                                                        # for msc:// (S3) checkpoint storage; the driver's CheckpointManager runs in the base venv
@@ -177,9 +180,11 @@ vllm = [
   # https://github.com/vllm-project/vllm/releases/tag/v0.29.0
   "vllm==0.29.0",
   "num2words>=0.5.14",
-  "flashinfer-python==0.6.18",
-  "flashinfer-cubin==0.6.18",
-  "flashinfer-jit-cache==0.6.18",
+  # Same wheels as the mcore extra and Megatron-Bridge. vLLM 0.29 declares
+  # ==0.6.18; the override below lifts that so the image keeps one cubin.
+  "flashinfer-python==0.6.18.post1",
+  "flashinfer-cubin==0.6.18.post1",
+  "flashinfer-jit-cache==0.6.18.post1",
   "nvidia-cutlass-dsl[cu13]==4.6.2",
 ]
 sglang = [
@@ -240,6 +245,7 @@ mcore = [
   "mamba-ssm",
   "causal-conv1d",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@17cfb817bccec3a9c247013360cc550c2bac441e",
+  # Megatron-Bridge pins these. The vllm extra uses the same post1 wheels.
   "flashinfer-python==0.6.18.post1",
   "flashinfer-cubin==0.6.18.post1",
   "flashinfer-jit-cache==0.6.18.post1",
@@ -456,6 +462,11 @@ link-mode = "copy"
 # The timm override is needed because sglang requires timm==1.0.16.
 override-dependencies = [
   "transformer-engine[pytorch,core_cu13]==2.18.0",
+  # vLLM 0.29 declares flashinfer-python==0.6.18. Megatron-Bridge declares
+  # 0.6.18.post1. Scoped to vllm so the sglang extra can keep 0.6.14 (post1
+  # needs cutlass >=4.6.2; sglang pins cutlass 4.6.0). The vllm and mcore
+  # extras both request post1, so the image keeps one cubin.
+  { package = { name = "vllm", version = "0.29.0" }, dependencies = ["flashinfer-python==0.6.18.post1"] },
   "nvidia-cublas==13.5.1.27; sys_platform != 'darwin'",
   "nvidia-cudnn-cu13==9.26.0.51; sys_platform != 'darwin'",
   "nvidia-cudnn-frontend==1.25.0 ; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",

@@ -3506,13 +3506,25 @@ def _build_sandboxed_gym_actor(
     tokenizer: PreTrainedTokenizerBase,
     enable_router_replay: bool,
     use_fastokens: bool,
+    turn_checkpointing_enabled: bool,
     token_capture: Optional[dict[str, Any]],
+    policy_api_key: Optional[str] = None,
 ) -> NemoGymShardSet:
     """Provision ``SandboxedGymActor`` instead of the colocated ``NemoGym`` actor.
 
     The sandbox keys are peeled off first so the remainder is still a Gym global
     config. The tokenizer is installed once after spinup, same as ``NemoGym``.
+
+    Turn checkpointing stays on the colocated actor: ``SandboxedGymActor`` has no
+    checkpoint adapter, so enabling it here would write a Gym checkpoint block
+    the host never coordinates.
     """
+    if turn_checkpointing_enabled:
+        raise ValueError(
+            "env.nemo_gym.sandboxed does not support turn checkpointing. "
+            "SandboxedGymActor has no checkpoint adapter."
+        )
+
     from sandboxed_gym.host.models import NemoGymSandboxedConfig
     from nemo_rl.environments.sandbox.nemo_gym_actor import (
         SANDBOXED_GYM_ACTOR_FQN,
@@ -3539,7 +3551,13 @@ def _build_sandboxed_gym_actor(
             model_name=model_name,
             enable_router_replay=enable_router_replay,
             use_fastokens=use_fastokens,
+            checkpoint_instance=GymCheckpointInstance(
+                shard_name=DEFAULT_SHARD_NAME,
+                replica_index=0,
+            ),
+            turn_checkpointing_enabled=False,
             token_capture=token_capture,
+            policy_api_key=policy_api_key,
         )
     )
     actor_config["sandboxed"] = sandboxed_cfg.model_dump(mode="python")
@@ -3597,7 +3615,13 @@ def build_nemo_gym_actors(
             actors already created are torn down first.
     """
     nemo_gym_dict = dict(env_configs["nemo_gym"])
+    plan = parse_shard_plan(nemo_gym_dict)
     if nemo_gym_dict.get("sandboxed"):
+        if plan is not None:
+            raise ShardConfigError(
+                "env.nemo_gym.sandboxed cannot be combined with env.nemo_gym.shards. "
+                "The sandboxed actor runs one Gym host."
+            )
         return _build_sandboxed_gym_actor(
             nemo_gym_dict,
             base_urls=base_urls,
@@ -3605,9 +3629,10 @@ def build_nemo_gym_actors(
             tokenizer=tokenizer,
             enable_router_replay=enable_router_replay,
             use_fastokens=use_fastokens,
+            turn_checkpointing_enabled=turn_checkpointing_enabled,
             token_capture=token_capture,
+            policy_api_key=policy_api_key,
         )
-    plan = parse_shard_plan(nemo_gym_dict)
 
     if plan is None:
         return _build_single_gym_actor(
