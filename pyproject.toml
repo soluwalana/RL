@@ -148,6 +148,9 @@ automodel = [
   # moe is the expert stack. vlm is the vision-language imports (backoff, numba,
   # timm, open-clip, ...) without vlm-media or diffusion-media, which pull FFmpeg.
   "nemo-automodel[moe,vlm]",
+  # LoRA: nemo-automodel only lists peft in its test group, so declare it here. Same range as
+  # Megatron-Bridge's pin so the automodel and mcore forks lock one peft version.
+  "peft>=0.20.0,<=0.21.0",
   # Automodel's FLA kernels require this TileLang version on Hopper.
   # Keep this scoped to the automodel fork; sglang intentionally pins TileLang 0.1.8.
   "tilelang==0.1.11; sys_platform == 'linux' and platform_machine == 'x86_64'",
