@@ -1653,6 +1653,24 @@ class VllmAsyncGenerationWorkerImpl(
         serving_chat_kwargs = serving_chat_default_kwargs | self.cfg["vllm_cfg"].get(
             "http_server_serving_chat_kwargs", dict()
         )
+        # vLLM resolves the tool parser while building the chat server and raises
+        # for a name it has not registered, which would stop generation even for
+        # requests that never use tools. Parser names differ between engines and
+        # vLLM versions, so a name configured for another engine or version is
+        # dropped with a warning instead. Plugin parsers are registered above.
+        configured_tool_parser = serving_chat_kwargs.get("tool_parser")
+        if (
+            configured_tool_parser
+            and configured_tool_parser not in ToolParserManager.list_registered()
+        ):
+            LOGGER.warning(
+                "tool_parser %r is not registered in this vLLM, so the chat server "
+                "starts without one; requests with tools and an auto or named "
+                "tool_choice will be rejected. Registered parsers: %s",
+                configured_tool_parser,
+                ", ".join(ToolParserManager.list_registered()),
+            )
+            serving_chat_kwargs["tool_parser"] = None
         # The embedded server is constructed directly instead of through
         # vLLM's CLI, where chat-template file paths are normally loaded.
         # OnlineRenderer expects literal Jinja content; passing a path makes

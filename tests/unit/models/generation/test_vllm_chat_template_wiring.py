@@ -177,7 +177,12 @@ def _install_fake_vllm(monkeypatch):
     module(
         "vllm.tool_parsers.abstract_tool_parser",
         ToolParserManager=type(
-            "ToolParserManager", (), {"import_tool_parser": MagicMock()}
+            "ToolParserManager",
+            (),
+            {
+                "import_tool_parser": MagicMock(),
+                "list_registered": staticmethod(lambda: ["hermes", "llama3_json"]),
+            },
         ),
     )
     module("vllm.v1.engine.async_llm", logger=MagicMock())
@@ -396,6 +401,23 @@ def test_native_spelling_wins_and_legacy_is_dropped(monkeypatch):
     chat_kwargs = serving_chat[0].kwargs
     assert chat_kwargs["default_chat_template_kwargs"] == {"enable_thinking": True}
     assert "chat_template_kwargs" not in chat_kwargs
+
+
+@pytest.mark.parametrize(
+    ("tool_parser", "expected"),
+    [("hermes", "hermes"), ("qwen25", None)],
+    ids=["registered", "not-registered"],
+)
+def test_unregistered_tool_parser_is_dropped(monkeypatch, tool_parser, expected):
+    """vLLM raises while building the chat server for a parser it has not registered.
+
+    A name meant for another engine or vLLM version would otherwise stop
+    generation even for requests that never use tools.
+    """
+    renderer, serving_chat, _ = _build_server(monkeypatch, {"tool_parser": tool_parser})
+
+    assert renderer[0].kwargs["tool_parser"] == expected
+    assert serving_chat[0].kwargs["tool_parser"] == expected
 
 
 def test_absent_kwargs_render_as_empty_dict(monkeypatch):
